@@ -1,0 +1,131 @@
+# --- Python Virtual Environments ---
+# Typically named 'venv', '.venv', 'env', 'ENV', 'env.bak', 'venv.bak'
+# Adjust to your virtual environment directory name(s)
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Python Bytecode and Cache ---
+# Compiled Python files
+*.pyc
+# Cache directories
+__pycache__/
+# MyPy cache
+.mypy_cache/
+# Pytest cache
+.pytest_cache/
+# Ruff cache
+.ruff_cache/
+# Pylint Pylint epylint
+.pylint.d/
+
+# --- Distribution / Packaging ---
+# Build artifacts
+build/
+dist/
+downloads/
+eggs/
+*.egg-info/
+*.egg
+wheels/
+*.whl
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+# Cython artifacts
+*.so
+*.pyd
+
+# --- Unit Test / Coverage Reports ---
+# Coverage data
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+nosetests.xml
+# Test reports or temporary files
+*.unittest
+pytestdebug.log
+# Tox temporary files
+.tox/
+
+# --- IDEs and Editors ---
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+# JetBrains (PyCharm, IntelliJ, etc.)
+.idea/
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+# Eclipse
+.project
+.pydevproject
+# Netbeans
+nbproject/
+# Vim
+*~
+*.swp
+*.swo
+# Emacs
+*#
+.#*
+
+# --- Operating System Files ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+# Linux
+._*
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Secrets and Sensitive Configuration ---
+# Never commit secrets!
+# Use environment variables or a separate untracked config file.
+.env
+.env.*
+!.env.example # Often an example .env file IS committed
+secrets.ini
+secret_key.py
+*.pem
+*.key
+*.keyfile
+credentials.*
+config.local.py # Or similar local overrides
+
+# --- Jupyter Notebook Checkpoints ---
+.ipynb_checkpoints/
+
+# --- Instance specific folders (e.g., for Flask) ---
+instance/
+# If you have other local data folders
+local_data/
+data/ # Be careful with this one, only if all data should be ignored
+
+# --- SQLite Databases (if used for local dev/testing and not part of the product) ---
+*.sqlite3
+*.db
+*.db3
+
+# --- HTML documentation ---
+# (if generated from source and not meant to be in the repo)
+docs/_build/
+site/ # if using mkdocs or similar
+
+# --- Temporary files ---
+*.tmp
+*.temp
