@@ -1,0 +1,14 @@
+# Django Web Framework
+django
+
+# Django REST Framework for building APIs
+djangorestframework
+
+# Celery for asynchronous background tasks
+celery
+
+# Feedparser for parsing RSS and Atom feeds
+feedparser
+
+# NOTE: The filesystem broker we are using is built into Celery.
+# If we were using Redis or RabbitMQ, their client libraries would be listed here.
