@@ -25,7 +25,7 @@ SECRET_KEY = "django-insecure-bq^u=2w5i-q(@gmqilreqyo-z_-prgy(5m_!vemel4f#x2q6_5
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['192.168.68.83', 'localhost', '127.0.0.1']
 
 
 # Application definition
@@ -37,6 +37,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # 3rd Party Apps
+    'rest_framework',
+    # Local Apps
+    'podcasts', # Add this line
 ]
 
 MIDDLEWARE = [
@@ -121,3 +125,38 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+      
+# Celery Configuration
+# This uses the local filesystem as a broker. Simple and no dependencies.
+CELERY_BROKER_URL = "filesystem://"
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'data_folder_in': './celery_broker/out',
+    'data_folder_out': './celery_broker/out',
+    'processed_folder': './celery_broker/processed',
+}
+
+# You can still use SQLite for the result backend, as it has fewer locking issues.
+CELERY_RESULT_BACKEND = "db+sqlite:///celery_results.sqlite3"
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO', # You can set this to 'DEBUG' for even more verbosity
+    },
+}

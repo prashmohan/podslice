@@ -129,3 +129,5 @@ site/ # if using mkdocs or similar
 # --- Temporary files ---
 *.tmp
 *.temp
+
+celery_broker/
