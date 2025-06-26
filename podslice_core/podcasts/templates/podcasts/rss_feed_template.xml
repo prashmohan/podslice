@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+    <channel>
+        <title>{{ podcast.title }} (Ad-Free)</title>
+        <link>{{ rehost_base_url }}/feeds/podcasts/{{ podcast.id }}/rss.xml</link>
+        <atom:link href="{{ rehost_base_url }}/feeds/podcasts/{{ podcast.id }}/rss.xml" rel="self" type="application/rss+xml" />
+        <description>An ad-free version of {{ podcast.title }} re-hosted by Podslice.</description>
+        <language>en-us</language>
+        <lastBuildDate>{{ build_date }}</lastBuildDate>
+        {% if podcast.artwork_url %}
+        <itunes:image href="{{ podcast.artwork_url }}" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"/>
+        {% endif %}
+
+        {% for episode in episodes %}
+        <item>
+            <title>{{ episode.title }}</title>
+            <link>{{ episode.rehosted_audio_url }}</link>
+            <guid isPermaLink="false">{{ episode.guid }}</guid>
+            <pubDate>{{ episode.pub_date|date:"D, d M Y H:i:s O" }}</pubDate>
+            <description>Ad-free version of {{ episode.title }}</description>
+            <enclosure url="{{ episode.rehosted_audio_url }}" length="0" type="audio/mpeg" />
+        </item>
+        {% endfor %}
+    </channel>
+</rss>
