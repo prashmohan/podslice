@@ -6,10 +6,10 @@ from datetime import datetime
 import uuid
 import json
 import io
+import threading
 
 import feedparser
 import requests
-from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 import google.generativeai as genai
@@ -24,12 +24,9 @@ logger = logging.getLogger(__name__)
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
 
-@shared_task
 def poll_feed(podcast_id):
     """
     Fetches and parses a podcast's RSS feed to find and save new episodes.
-    This task is idempotent: running it multiple times will not create
-    duplicate episodes.
     """
     logger.info(f"Starting poll for Podcast ID: {podcast_id}")
     try:
@@ -84,7 +81,8 @@ def poll_feed(podcast_id):
             if created:
                 new_episodes_count += 1
                 logger.info(f"New episode created: '{episode.title}' for podcast '{podcast.title}'. Dispatching rehost task.")
-                rehost_episode_audio.delay(episode.id)
+                rehost_thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
+                rehost_thread.start()
             else:
                 skipped_episodes_count += 1
         except Exception as e:
@@ -93,7 +91,6 @@ def poll_feed(podcast_id):
     logger.info(f"Polling complete for '{podcast.title}'. Found {new_episodes_count} new episodes. Skipped {skipped_episodes_count} existing episodes.")
 
 
-@shared_task
 def rehost_episode_audio(episode_id):
     """
     Downloads an episode's audio, processes it to remove ads using Gemini,

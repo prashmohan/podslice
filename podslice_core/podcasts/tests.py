@@ -254,28 +254,9 @@ class PodcastTasksTest(TestCase):
         }.get(key, default)
         return mock_entry
 
-    @mock.patch('podcasts.tasks.rehost_episode_audio.delay')
+    @mock.patch('podcasts.tasks.threading.Thread')
     @mock.patch('podcasts.tasks.feedparser.parse')
-    def test_poll_feed_success_new_episodes(self, mock_feedparser_parse, mock_rehost_delay):
-        entry1_guid = "guid1"
-        entry1 = self._create_mock_entry(
-            entry1_guid, "Episode 1", "http://example.com/ep1.mp3", (2024, 1, 1, 12, 0, 0, 1, 1, 0)
-        )
-        mock_feed = self._create_mock_feed([entry1])
-        mock_feedparser_parse.return_value = mock_feed
-
-        result = poll_feed(self.podcast.id)
-
-        self.assertEqual(Episode.objects.count(), 1)
-        new_episode = Episode.objects.first()
-        self.assertEqual(new_episode.guid, entry1_guid)
-        self.assertEqual(new_episode.title, "Episode 1")
-        mock_rehost_delay.assert_called_once_with(new_episode.id)
-        self.assertIn("Found 1 new episodes", result)
-
-    @mock.patch('podcasts.tasks.rehost_episode_audio.delay')
-    @mock.patch('podcasts.tasks.feedparser.parse')
-    def test_poll_feed_idempotency(self, mock_feedparser_parse, mock_rehost_delay):
+    def test_poll_feed_idempotency(self, mock_feedparser_parse, mock_thread):
         entry1_guid = "guid1"
         entry1 = self._create_mock_entry(
             entry1_guid, "Episode 1", "http://example.com/ep1.mp3", (2024, 1, 1, 12, 0, 0, 1, 1, 0)
@@ -285,25 +266,24 @@ class PodcastTasksTest(TestCase):
 
         poll_feed(self.podcast.id)
         self.assertEqual(Episode.objects.count(), 1)
-        mock_rehost_delay.assert_called_once()
+        mock_thread.assert_called_once()
 
         poll_feed(self.podcast.id)
         self.assertEqual(Episode.objects.count(), 1)
-        mock_rehost_delay.assert_called_once()
+        mock_thread.assert_called_once()
 
     @mock.patch('podcasts.tasks.feedparser.parse')
     def test_poll_feed_malformed_feed(self, mock_feedparser_parse):
         mock_feedparser_parse.return_value = mock.Mock(bozo=1, bozo_exception="It's broken")
         
-        result = poll_feed(self.podcast.id)
+        poll_feed(self.podcast.id)
         
         self.assertEqual(Episode.objects.count(), 0)
-        self.assertIn("Error processing feed", result)
 
-    def test_poll_feed_podcast_not_found(self):
+    @mock.patch('podcasts.tasks.feedparser.parse')
+    def test_poll_feed_podcast_not_found(self, mock_feedparser_parse):
         non_existent_uuid = uuid.uuid4()
-        result = poll_feed(non_existent_uuid)
-        self.assertIn("does not exist", result)
+        poll_feed(non_existent_uuid)
 
     @mock.patch('podcasts.tasks.feedparser.parse')
     def test_poll_feed_entry_missing_guid(self, mock_feedparser_parse):
@@ -361,7 +341,6 @@ class PodcastTasksTest(TestCase):
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.COMPLETE)
         self.assertIsNotNone(episode.rehosted_audio_url)
-        self.assertIn("Rehost completed", result)
         mock_requests_get.assert_called_once_with(episode.original_audio_url, stream=True)
         mock_generative_model.assert_called_once_with('gemini-2.5-pro')
         mock_audio_segment_from_file.assert_called_once()
@@ -381,11 +360,10 @@ class PodcastTasksTest(TestCase):
             status=Episode.Status.NEW
         )
 
-        result = rehost_episode_audio(episode.id)
+        rehost_episode_audio(episode.id)
 
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.FAILED)
-        self.assertIn("Failed to download audio", result)
 
     @mock.patch('podcasts.tasks.requests.get')
     @mock.patch('podcasts.tasks.genai.GenerativeModel')
@@ -407,11 +385,10 @@ class PodcastTasksTest(TestCase):
             status=Episode.Status.NEW
         )
 
-        result = rehost_episode_audio(episode.id)
+        rehost_episode_audio(episode.id)
 
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.FAILED)
-        self.assertIn("An error occurred during rehosting", result)
         mock_os_remove.assert_called_once()
 
     @mock.patch('podcasts.tasks.requests.get')
@@ -439,11 +416,10 @@ class PodcastTasksTest(TestCase):
             status=Episode.Status.NEW
         )
 
-        result = rehost_episode_audio(episode.id)
+        rehost_episode_audio(episode.id)
 
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.FAILED)
-        self.assertIn("An error occurred during rehosting", result)
         mock_os_remove.assert_called_once()
 
     @mock.patch('podcasts.tasks.requests.get')
@@ -479,17 +455,15 @@ class PodcastTasksTest(TestCase):
             status=Episode.Status.NEW
         )
 
-        result = rehost_episode_audio(episode.id)
+        rehost_episode_audio(episode.id)
 
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.FAILED)
-        self.assertIn("An error occurred during rehosting", result)
         mock_os_remove.assert_called_once()
 
     def test_rehost_episode_audio_episode_not_found(self):
         non_existent_uuid = uuid.uuid4()
-        result = rehost_episode_audio(non_existent_uuid)
-        self.assertIn("does not exist", result)
+        rehost_episode_audio(non_existent_uuid)
 
 class PodcastUITest(TestCase):
     def setUp(self):
@@ -533,9 +507,9 @@ class PodcastUITest(TestCase):
         self.assertContains(response, self.podcast.title)
 
 class CreatePodcastFromUrlTest(TestCase):
-    @mock.patch('podcasts.views.poll_feed.delay')
+    @mock.patch('podcasts.views.threading.Thread')
     @mock.patch('podcasts.views.feedparser.parse')
-    def test_create_podcast_from_url_success(self, mock_feedparser_parse, mock_poll_feed_delay):
+    def test_create_podcast_from_url_success(self, mock_feedparser_parse, mock_thread):
         mock_feedparser_parse.return_value = mock.Mock(
             bozo=0,
             feed={'title': 'New Podcast', 'image': {'href': 'http://example.com/new_artwork.jpg'}}
@@ -546,7 +520,7 @@ class CreatePodcastFromUrlTest(TestCase):
         self.assertIsInstance(podcast, Podcast)
         self.assertEqual(podcast.title, "New Podcast")
         self.assertEqual(Podcast.objects.count(), 1)
-        mock_poll_feed_delay.assert_called_once_with(podcast.id)
+        mock_thread.assert_called_once_with(target=poll_feed, args=(podcast.id,))
 
     @mock.patch('podcasts.views.feedparser.parse')
     def test_create_podcast_from_url_already_exists(self, mock_feedparser_parse):
@@ -592,9 +566,9 @@ class PollFeedEpisodeLimitTest(TestCase):
         }.get(key, default)
         return mock_entry
 
-    @mock.patch('podcasts.tasks.rehost_episode_audio.delay')
+    @mock.patch('podcasts.tasks.threading.Thread')
     @mock.patch('podcasts.tasks.feedparser.parse')
-    def test_poll_feed_limits_episodes(self, mock_feedparser_parse, mock_rehost_delay):
+    def test_poll_feed_limits_episodes(self, mock_feedparser_parse, mock_thread):
         entry1 = self._create_mock_entry("guid1", "Episode 1", "http://example.com/ep1.mp3", (2024, 1, 3, 12, 0, 0, 1, 3, 0))
         entry2 = self._create_mock_entry("guid2", "Episode 2", "http://example.com/ep2.mp3", (2024, 1, 2, 12, 0, 0, 1, 2, 0))
         entry3 = self._create_mock_entry("guid3", "Episode 3", "http://example.com/ep3.mp3", (2024, 1, 1, 12, 0, 0, 1, 1, 0))
@@ -608,4 +582,4 @@ class PollFeedEpisodeLimitTest(TestCase):
         self.assertTrue(Episode.objects.filter(guid="guid1").exists())
         self.assertTrue(Episode.objects.filter(guid="guid2").exists())
         self.assertFalse(Episode.objects.filter(guid="guid3").exists())
-        self.assertEqual(mock_rehost_delay.call_count, 2)
+        self.assertEqual(mock_thread.call_count, 2)

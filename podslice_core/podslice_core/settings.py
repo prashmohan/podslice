@@ -139,21 +139,9 @@ if not GEMINI_API_KEY:
     raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
 
 # Base URL for the rehost service
-REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://192.168.68.83:12342")
+REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://localhost:8001")
 
       
-# Celery Configuration
-# This uses the local filesystem as a broker. Simple and no dependencies.
-CELERY_BROKER_URL = "filesystem://"
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'data_folder_in': './celery_broker/out',
-    'data_folder_out': './celery_broker/out',
-    'processed_folder': './celery_broker/processed',
-}
-
-# You can still use SQLite for the result backend, as it has fewer locking issues.
-CELERY_RESULT_BACKEND = "db+sqlite:///celery_results.sqlite3"
-
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

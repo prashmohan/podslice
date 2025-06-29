@@ -1,8 +1,8 @@
 import logging
 import feedparser
+import threading
 from django.db import transaction
 from rest_framework import generics, serializers
-from celery.exceptions import CeleryError
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views import View
 from django.urls import reverse
@@ -51,15 +51,13 @@ def create_podcast_from_url(rss_url: str) -> Podcast:
                 return podcast
 
             logger.info(f"New podcast '{feed_title}' created with ID: {podcast.id}. Dispatching polling task.")
-            poll_feed.delay(podcast.id)
+            poll_thread = threading.Thread(target=poll_feed, args=(podcast.id,))
+            poll_thread.start()
             logger.debug(f"Polling task for Podcast ID {podcast.id} dispatched successfully.")
         
         return podcast
     except (ValueError, IOError) as e:
         logger.error(f"Failed to process RSS feed at {rss_url}.", exc_info=True)
-        raise
-    except CeleryError as e:
-        logger.error(f"Celery task dispatch failed for podcast at {rss_url}.", exc_info=True)
         raise
     except Exception as e:
         logger.error(f"An unexpected error occurred during podcast subscription for {rss_url}.", exc_info=True)
@@ -112,8 +110,6 @@ class PodcastSubscriptionAPIView(generics.ListCreateAPIView):
             create_podcast_from_url(rss_url)
         except (ValueError, IOError) as e:
             raise serializers.ValidationError({"rss_url": [f"Could not fetch or parse the feed. Reason: {e}"]})
-        except CeleryError as e:
-            raise serializers.ValidationError({"non_field_errors": ["The system could not queue the podcast for processing. Please check the server configuration."]})
         except Exception as e:
             raise serializers.ValidationError({"non_field_errors": [f"An unexpected server error occurred: {e}"]})
 
