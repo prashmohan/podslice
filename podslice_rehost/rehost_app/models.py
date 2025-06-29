@@ -26,3 +26,96 @@ class RehostedMedia(models.Model):
 
     def __str__(self):
         return f"Media {self.media_guid}"
+
+class RehostedPodcast(models.Model):
+    """
+    Represents a re-hosted podcast, storing metadata about the original podcast.
+    """
+    slug = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text="A unique slug for the podcast, derived from its original RSS feed URL."
+    )
+    original_rss_url = models.URLField(
+        max_length=1024,
+        help_text="The original RSS feed URL of the podcast."
+    )
+    title = models.CharField(
+        max_length=500,
+        help_text="The title of the podcast."
+    )
+    author = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="The author of the podcast."
+    )
+    artwork_url = models.URLField(
+        max_length=1024,
+        blank=True,
+        null=True,
+        help_text="URL to the podcast's artwork."
+    )
+    description = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Description of the podcast."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.title
+
+class RehostedEpisode(models.Model):
+    """
+    Represents a re-hosted episode, linking to its podcast and storing episode-specific metadata.
+    """
+    podcast = models.ForeignKey(
+        RehostedPodcast,
+        on_delete=models.CASCADE,
+        related_name='episodes',
+        help_text="The podcast this episode belongs to."
+    )
+    guid = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text="The unique identifier (GUID) of the episode from the original RSS feed."
+    )
+    title = models.CharField(
+        max_length=500,
+        help_text="The title of the episode."
+    )
+    pub_date_iso = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="Publication date of the episode in ISO format."
+    )
+    description = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Description of the episode."
+    )
+    absolute_file_path = models.CharField(
+        max_length=1024,
+        help_text="The absolute path to the processed audio file on the shared media volume."
+    )
+    duration_seconds = models.IntegerField(
+        blank=True,
+        null=True,
+        help_text="Duration of the episode in seconds."
+    )
+    audio_file_size_bytes = models.BigIntegerField(
+        blank=True,
+        null=True,
+        help_text="Size of the audio file in bytes."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('podcast', 'guid',) # Ensure GUIDs are unique per podcast
+
+    def __str__(self):
+        return f"{self.podcast.title} - {self.title}"

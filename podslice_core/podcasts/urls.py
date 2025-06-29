@@ -1,8 +1,8 @@
 from django.urls import path
-from .views import PodcastSubscriptionAPIView, PodcastRSSFeedView
+from .views import PodcastSubscriptionAPIView, PodcastRSSFeedView, PodcastStatusAPIView
 
 urlpatterns = [
-    path('podcasts/', PodcastSubscriptionAPIView.as_view(), name='podcast-subscribe'),
-    path('feeds/podcasts/<uuid:podcast_id>/rss.xml', PodcastRSSFeedView.as_view(), name='podcast-rss-feed'),
-    path('podcasts/<uuid:podcast_id>/status/', PodcastStatusAPIView.as_view(), name='podcast-status'),
+    path('subscribe/', PodcastSubscriptionAPIView.as_view(), name='podcast-subscribe'),
+    path('rss/<uuid:podcast_id>/', PodcastRSSFeedView.as_view(), name='podcast-rss-feed'),
+    path('status/<uuid:podcast_id>/', PodcastStatusAPIView.as_view(), name='podcast-status'),
 ]

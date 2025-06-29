@@ -1,10 +1,10 @@
 import logging
 import feedparser
-from django.db import transaction  # 1. Import transaction
+from django.db import transaction
 from rest_framework import generics, serializers
 from celery.exceptions import CeleryError
 
-from .models import Podcast
+from .models import Podcast, Episode
 from .serializers import PodcastSerializer
 from .tasks import poll_feed
 
@@ -85,7 +85,7 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
 
     def retrieve(self, request, *args, **kwargs):
         podcast = self.get_object()
-        episodes = podcast.episodes.filter(status=Podcast.Episode.Status.COMPLETED).order_by('-pub_date')
+        episodes = podcast.episodes.filter(status=Episode.Status.COMPLETE).order_by('-pub_date')
 
         context = {
             'podcast': podcast,

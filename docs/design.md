@@ -69,7 +69,6 @@ Our primary user, "Alex," is a technically savvy podcast listener. Alex is comfo
 
 The architecture is composed of two primary services, a shared file store, and a background worker system. This separation ensures that the core application logic is isolated from the concerns of high-volume file delivery.
 ```
-
       User Request (RSS URL)
             |
             v
@@ -95,11 +94,11 @@ v         |           v
 | 5. Uses pydub to slice audio, removes ad segments                        |
 | 6. Saves new ad-free audio to /media storage                             |
 | 7. Updates core SQLite DB with status                                    |
-| 8. Updates rehost SQLite DB with file info & URL                         |
+| 8. Writes metadata JSON to /media/messages for podslice_rehost           |
 +--------------------------------------------------------------------------+
-                    |
-                    | Serves new ad-free audio file
-                    v
+                                  |
+                                  | (9) podslice_rehost Consumer reads JSON
+                                  v
 +--------------------------------------+
 |    podslice_rehost (Django)          |
 |       - Reads from /media            |-----> User/Podcast Player

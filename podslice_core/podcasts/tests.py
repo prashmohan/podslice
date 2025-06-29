@@ -1,3 +1,512 @@
 from django.test import TestCase
+from django.utils import timezone
+from datetime import datetime
+import uuid
+from unittest import mock
+import time
+import requests # Import requests
+import io
 
-# Create your tests here.
+from rest_framework.test import APIClient
+from rest_framework import status
+from django.urls import reverse
+
+from .models import Podcast, Episode
+from .serializers import PodcastSerializer, EpisodeSerializer
+from .tasks import poll_feed, rehost_episode_audio
+from pydub import AudioSegment
+
+class PodcastModelTest(TestCase):
+    def setUp(self):
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/feed.xml",
+            artwork_url="http://example.com/artwork.jpg"
+        )
+
+    def test_podcast_creation(self):
+        self.assertIsInstance(self.podcast, Podcast)
+        self.assertEqual(self.podcast.title, "Test Podcast")
+        self.assertEqual(self.podcast.rss_url, "http://example.com/feed.xml")
+        self.assertEqual(self.podcast.artwork_url, "http://example.com/artwork.jpg")
+
+    def test_podcast_str_representation(self):
+        self.assertEqual(str(self.podcast), "Test Podcast")
+
+class EpisodeModelTest(TestCase):
+    def setUp(self):
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/feed.xml",
+            artwork_url="http://example.com/artwork.jpg"
+        )
+        self.episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.make_aware(datetime(2024, 1, 1)),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.NEW
+        )
+
+    def test_episode_creation(self):
+        self.assertIsInstance(self.episode, Episode)
+        self.assertEqual(self.episode.podcast, self.podcast)
+        self.assertEqual(self.episode.title, "Test Episode")
+        self.assertIsNotNone(self.episode.guid)
+        self.assertEqual(self.episode.pub_date, timezone.make_aware(datetime(2024, 1, 1)))
+        self.assertEqual(self.episode.original_audio_url, "http://example.com/audio.mp3")
+        self.assertEqual(self.episode.status, Episode.Status.NEW)
+        self.assertIsNone(self.episode.rehosted_audio_url)
+        self.assertIsNone(self.episode.ad_segments)
+        self.assertIsNotNone(self.episode.created_at)
+        self.assertIsNotNone(self.episode.updated_at)
+
+    def test_episode_str_representation(self):
+        self.assertEqual(str(self.episode), "Test Podcast - Test Episode")
+
+    def test_episode_status_choices(self):
+        for status_choice in Episode.Status:
+            episode = Episode.objects.create(
+                podcast=self.podcast,
+                title=f"Episode with status {status_choice.value}",
+                guid=str(uuid.uuid4()),
+                pub_date=timezone.now(),
+                original_audio_url="http://example.com/audio.mp3",
+                status=status_choice.value
+            )
+            self.assertEqual(episode.status, status_choice.value)
+
+
+class PodcastSerializerTest(TestCase):
+    def setUp(self):
+        self.podcast_data = {
+            'rss_url': 'http://example.com/new_feed.xml'
+        }
+        self.podcast = Podcast.objects.create(
+            title="Existing Podcast",
+            rss_url="http://example.com/existing_feed.xml",
+            artwork_url="http://example.com/artwork.jpg"
+        )
+        self.episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Existing Episode",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/existing_audio.mp3",
+            status=Episode.Status.COMPLETE,
+            rehosted_audio_url="http://rehost.example.com/audio/123/",
+            ad_segments='[]'
+        )
+
+    def test_podcast_serializer_valid_data(self):
+        serializer = PodcastSerializer(data=self.podcast_data)
+        self.assertTrue(serializer.is_valid())
+
+    def test_podcast_serializer_duplicate_rss_url(self):
+        duplicate_data = {'rss_url': 'http://example.com/existing_feed.xml'}
+        serializer = PodcastSerializer(data=duplicate_data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('rss_url', serializer.errors)
+        self.assertEqual(str(serializer.errors['rss_url'][0]), "podcast with this rss url already exists.")
+
+    def test_podcast_serializer_representation(self):
+        serializer = PodcastSerializer(instance=self.podcast)
+        data = serializer.data
+        self.assertEqual(data['id'], str(self.podcast.id))
+        self.assertEqual(data['title'], self.podcast.title)
+        self.assertEqual(data['rss_url'], self.podcast.rss_url)
+        self.assertEqual(data['artwork_url'], self.podcast.artwork_url)
+        
+        self.assertIn('episodes', data)
+        self.assertEqual(len(data['episodes']), 1)
+        self.assertEqual(data['episodes'][0]['id'], str(self.episode.id))
+
+
+class EpisodeSerializerTest(TestCase):
+    def setUp(self):
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/feed.xml",
+            artwork_url="http://example.com/artwork.jpg"
+        )
+        self.episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.COMPLETE,
+            rehosted_audio_url="http://rehost.example.com/audio/abc/",
+            ad_segments='[{"start": 10, "end": 20}]'
+        )
+
+    def test_episode_serializer_representation(self):
+        serializer = EpisodeSerializer(instance=self.episode)
+        data = serializer.data
+        self.assertEqual(data['id'], str(self.episode.id))
+        self.assertEqual(data['title'], self.episode.title)
+        
+        self.assertEqual(data['original_audio_url'], self.episode.original_audio_url)
+        self.assertEqual(data['rehosted_audio_url'], self.episode.rehosted_audio_url)
+
+
+class PodcastViewsTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/feed.xml",
+            artwork_url="http://example.com/artwork.jpg"
+        )
+        self.episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.COMPLETE,
+            rehosted_audio_url="http://rehost.example.com/audio/abc/",
+            ad_segments='[]'
+        )
+
+    @mock.patch('podcasts.views.feedparser.parse')
+    @mock.patch('podcasts.views.poll_feed.delay')
+    def test_podcast_subscription_api_view_post_success(self, mock_poll_feed_delay, mock_feedparser_parse):
+        mock_feedparser_parse.return_value = mock.Mock(
+            bozo=0,
+            feed={'title': 'New Podcast', 'image': {'href': 'http://example.com/new_artwork.jpg'}}
+        )
+
+        data = {'rss_url': 'http://example.com/new_podcast_feed.xml'}
+        response = self.client.post(reverse('podcasts:podcast-subscribe'), data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Podcast.objects.count(), 2)
+        mock_poll_feed_delay.assert_called_once()
+
+    @mock.patch('podcasts.views.feedparser.parse')
+    def test_podcast_subscription_api_view_post_invalid_feed(self, mock_feedparser_parse):
+        mock_feedparser_parse.return_value = mock.Mock(
+            bozo=1,
+            bozo_exception='Malformed feed'
+        )
+        data = {'rss_url': 'http://example.com/invalid_feed.xml'}
+        response = self.client.post(reverse('podcasts:podcast-subscribe'), data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Could not fetch or parse the feed', str(response.data))
+
+    @mock.patch('podcasts.views.feedparser.parse')
+    def test_podcast_subscription_api_view_post_no_title(self, mock_feedparser_parse):
+        mock_feedparser_parse.return_value = mock.Mock(
+            bozo=0,
+            feed={}
+        )
+        data = {'rss_url': 'http://example.com/no_title_feed.xml'}
+        response = self.client.post(reverse('podcasts:podcast-subscribe'), data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('Could not find a title in the parsed feed', str(response.data))
+
+    def test_podcast_subscription_api_view_get(self):
+        response = self.client.get(reverse('podcasts:podcast-subscribe'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['title'], self.podcast.title)
+
+    def test_podcast_rss_feed_view(self):
+        response = self.client.get(reverse('podcasts:podcast-rss-feed', kwargs={'podcast_id': self.podcast.id}))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response['Content-Type'], 'application/xml')
+        self.assertIn(f'<title>{self.podcast.title} (Ad-Free)</title>', response.content.decode())
+        self.assertIn(f'<enclosure url="{self.episode.rehosted_audio_url}"', response.content.decode())
+
+    def test_podcast_rss_feed_view_not_found(self):
+        non_existent_uuid = uuid.uuid4()
+        url = reverse('podcasts:podcast-rss-feed', kwargs={'podcast_id': non_existent_uuid})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_podcast_status_api_view(self):
+        url = reverse('podcasts:podcast-status', kwargs={'podcast_id': self.podcast.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['id'], str(self.podcast.id))
+        self.assertEqual(response.data['title'], self.podcast.title)
+        self.assertIn('episodes', response.data)
+        self.assertEqual(len(response.data['episodes']), 1)
+        self.assertEqual(response.data['episodes'][0]['id'], str(self.episode.id))
+
+    def test_podcast_status_api_view_not_found(self):
+        non_existent_uuid = uuid.uuid4()
+        response = self.client.get(reverse('podcasts:podcast-status', kwargs={'podcast_id': non_existent_uuid}))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+class PodcastTasksTest(TestCase):
+    def setUp(self):
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/feed.xml"
+        )
+
+    def _create_mock_feed(self, entries):
+        return mock.Mock(
+            bozo=0,
+            entries=entries
+        )
+
+    def _create_mock_entry(self, guid, title, audio_url, pub_date_tuple):
+        entry_data = {
+            "id": guid,
+            "guid": guid,
+            "title": title,
+            "published_parsed": time.struct_time(pub_date_tuple) if pub_date_tuple else None,
+        }
+        enclosures = []
+        if audio_url:
+            enclosures.append({"type": "audio/mpeg", "href": audio_url})
+
+        mock_entry = mock.Mock(**entry_data)
+        mock_entry.get.side_effect = lambda key, default=None: {
+            "id": guid,
+            "guid": guid,
+            "title": title,
+            "published_parsed": time.struct_time(pub_date_tuple) if pub_date_tuple else None,
+            "enclosures": enclosures
+        }.get(key, default)
+        return mock_entry
+
+    @mock.patch('podcasts.tasks.rehost_episode_audio.delay')
+    @mock.patch('podcasts.tasks.feedparser.parse')
+    def test_poll_feed_success_new_episodes(self, mock_feedparser_parse, mock_rehost_delay):
+        entry1_guid = "guid1"
+        entry1 = self._create_mock_entry(
+            entry1_guid, "Episode 1", "http://example.com/ep1.mp3", (2024, 1, 1, 12, 0, 0, 1, 1, 0)
+        )
+        mock_feed = self._create_mock_feed([entry1])
+        mock_feedparser_parse.return_value = mock_feed
+
+        result = poll_feed(self.podcast.id)
+
+        self.assertEqual(Episode.objects.count(), 1)
+        new_episode = Episode.objects.first()
+        self.assertEqual(new_episode.guid, entry1_guid)
+        self.assertEqual(new_episode.title, "Episode 1")
+        mock_rehost_delay.assert_called_once_with(new_episode.id)
+        self.assertIn("Found 1 new episodes", result)
+
+    @mock.patch('podcasts.tasks.rehost_episode_audio.delay')
+    @mock.patch('podcasts.tasks.feedparser.parse')
+    def test_poll_feed_idempotency(self, mock_feedparser_parse, mock_rehost_delay):
+        entry1_guid = "guid1"
+        entry1 = self._create_mock_entry(
+            entry1_guid, "Episode 1", "http://example.com/ep1.mp3", (2024, 1, 1, 12, 0, 0, 1, 1, 0)
+        )
+        mock_feed = self._create_mock_feed([entry1])
+        mock_feedparser_parse.return_value = mock_feed
+
+        poll_feed(self.podcast.id)
+        self.assertEqual(Episode.objects.count(), 1)
+        mock_rehost_delay.assert_called_once()
+
+        poll_feed(self.podcast.id)
+        self.assertEqual(Episode.objects.count(), 1)
+        mock_rehost_delay.assert_called_once()
+
+    @mock.patch('podcasts.tasks.feedparser.parse')
+    def test_poll_feed_malformed_feed(self, mock_feedparser_parse):
+        mock_feedparser_parse.return_value = mock.Mock(bozo=1, bozo_exception="It's broken")
+        
+        result = poll_feed(self.podcast.id)
+        
+        self.assertEqual(Episode.objects.count(), 0)
+        self.assertIn("Error processing feed", result)
+
+    def test_poll_feed_podcast_not_found(self):
+        non_existent_uuid = uuid.uuid4()
+        result = poll_feed(non_existent_uuid)
+        self.assertIn("does not exist", result)
+
+    @mock.patch('podcasts.tasks.feedparser.parse')
+    def test_poll_feed_entry_missing_guid(self, mock_feedparser_parse):
+        entry_no_guid = self._create_mock_entry(None, "No GUID", "http://example.com/ep.mp3", (2024, 1, 1, 12, 0, 0, 1, 1, 0))
+        mock_feed = self._create_mock_feed([entry_no_guid])
+        mock_feedparser_parse.return_value = mock_feed
+
+        poll_feed(self.podcast.id)
+        self.assertEqual(Episode.objects.count(), 0)
+
+    @mock.patch('podcasts.tasks.feedparser.parse')
+    def test_poll_feed_entry_missing_audio(self, mock_feedparser_parse):
+        entry_no_audio = self._create_mock_entry("guid1", "No Audio", None, (2024, 1, 1, 12, 0, 0, 1, 1, 0))
+        mock_feed = self._create_mock_feed([entry_no_audio])
+        mock_feedparser_parse.return_value = mock_feed
+
+        poll_feed(self.podcast.id)
+        self.assertEqual(Episode.objects.count(), 0)
+
+    @mock.patch('podcasts.tasks.requests.get')
+    @mock.patch('podcasts.tasks.genai.GenerativeModel')
+    @mock.patch('podcasts.tasks.AudioSegment.from_file')
+    @mock.patch('podcasts.tasks.os.makedirs')
+    @mock.patch('podcasts.tasks.os.remove')
+    @mock.patch('podcasts.tasks.RehostedMedia.objects.using')
+    def test_rehost_episode_audio_success(self, mock_rehosted_media_using, mock_os_remove, mock_os_makedirs, mock_audio_segment_from_file, mock_generative_model, mock_requests_get):
+        mock_response = mock.Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.iter_content.return_value = [b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"]
+        mock_requests_get.return_value = mock_response
+
+        mock_gemini_model_instance = mock.Mock()
+        mock_gemini_model_instance.generate_content.return_value = mock.Mock(text='[{"start": 10, "end": 20}]')
+        mock_generative_model.return_value = mock_gemini_model_instance
+
+        # Create a real AudioSegment object for testing
+        real_audio_segment = AudioSegment.silent(duration=100000)
+        mock_audio_segment_from_file.return_value = real_audio_segment
+
+        mock_rehosted_media_manager = mock.Mock()
+        mock_rehosted_media_using.return_value = mock_rehosted_media_manager
+        mock_rehosted_media_manager.create.return_value = mock.Mock(media_guid=uuid.uuid4())
+
+        episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode for Rehost",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.NEW
+        )
+
+        result = rehost_episode_audio(episode.id)
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.COMPLETE)
+        self.assertIsNotNone(episode.rehosted_audio_url)
+        self.assertIn("Rehost completed", result)
+        mock_requests_get.assert_called_once_with(episode.original_audio_url, stream=True)
+        mock_generative_model.assert_called_once_with('gemini-2.5-pro')
+        mock_audio_segment_from_file.assert_called_once()
+        mock_rehosted_media_manager.create.assert_called_once()
+        mock_os_remove.assert_called_once()
+
+    @mock.patch('podcasts.tasks.requests.get')
+    def test_rehost_episode_audio_download_failure(self, mock_requests_get):
+        mock_requests_get.side_effect = requests.exceptions.RequestException("Download failed")
+
+        episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode for Rehost",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.NEW
+        )
+
+        result = rehost_episode_audio(episode.id)
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.FAILED)
+        self.assertIn("Failed to download audio", result)
+
+    @mock.patch('podcasts.tasks.requests.get')
+    @mock.patch('podcasts.tasks.genai.GenerativeModel')
+    @mock.patch('podcasts.tasks.os.remove')
+    def test_rehost_episode_audio_gemini_failure(self, mock_os_remove, mock_generative_model, mock_requests_get):
+        mock_response = mock.Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.iter_content.return_value = [b"audio_data"]
+        mock_requests_get.return_value = mock_response
+
+        mock_generative_model.side_effect = Exception("Gemini error")
+
+        episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode for Rehost",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.NEW
+        )
+
+        result = rehost_episode_audio(episode.id)
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.FAILED)
+        self.assertIn("An error occurred during rehosting", result)
+        mock_os_remove.assert_called_once()
+
+    @mock.patch('podcasts.tasks.requests.get')
+    @mock.patch('podcasts.tasks.genai.GenerativeModel')
+    @mock.patch('podcasts.tasks.AudioSegment.from_file')
+    @mock.patch('podcasts.tasks.os.remove')
+    def test_rehost_episode_audio_pydub_failure(self, mock_os_remove, mock_audio_segment_from_file, mock_generative_model, mock_requests_get):
+        mock_response = mock.Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.iter_content.return_value = [b"audio_data"]
+        mock_requests_get.return_value = mock_response
+
+        mock_gemini_model_instance = mock.Mock()
+        mock_gemini_model_instance.generate_content.return_value = mock.Mock(text='[{"start": 10, "end": 20}]')
+        mock_generative_model.return_value = mock_gemini_model_instance
+
+        mock_audio_segment_from_file.side_effect = Exception("Pydub error")
+
+        episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode for Rehost",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.NEW
+        )
+
+        result = rehost_episode_audio(episode.id)
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.FAILED)
+        self.assertIn("An error occurred during rehosting", result)
+        mock_os_remove.assert_called_once()
+
+    @mock.patch('podcasts.tasks.requests.get')
+    @mock.patch('podcasts.tasks.genai.GenerativeModel')
+    @mock.patch('podcasts.tasks.AudioSegment.from_file')
+    @mock.patch('podcasts.tasks.os.makedirs')
+    @mock.patch('podcasts.tasks.os.remove')
+    @mock.patch('podcasts.tasks.RehostedMedia.objects.using')
+    def test_rehost_episode_audio_rehosted_media_save_failure(self, mock_rehosted_media_using, mock_os_remove, mock_os_makedirs, mock_audio_segment_from_file, mock_generative_model, mock_requests_get):
+        mock_response = mock.Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.iter_content.return_value = [b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"]
+        mock_requests_get.return_value = mock_response
+
+        mock_gemini_model_instance = mock.Mock()
+        mock_gemini_model_instance.generate_content.return_value = mock.Mock(text='[{"start": 10, "end": 20}]')
+        mock_generative_model.return_value = mock_gemini_model_instance
+
+        # Create a real AudioSegment object for testing
+        real_audio_segment = AudioSegment.silent(duration=100000)
+        mock_audio_segment_from_file.return_value = real_audio_segment
+
+        mock_rehosted_media_manager = mock.Mock()
+        mock_rehosted_media_using.return_value = mock_rehosted_media_manager
+        mock_rehosted_media_manager.create.side_effect = Exception("DB save error")
+
+        episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode for Rehost",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio.mp3",
+            status=Episode.Status.NEW
+        )
+
+        result = rehost_episode_audio(episode.id)
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.FAILED)
+        self.assertIn("An error occurred during rehosting", result)
+        mock_os_remove.assert_called_once()
+
+    def test_rehost_episode_audio_episode_not_found(self):
+        non_existent_uuid = uuid.uuid4()
+        result = rehost_episode_audio(non_existent_uuid)
+        self.assertIn("does not exist", result)
