@@ -14,6 +14,7 @@ from django.urls import reverse
 from .models import Podcast, Episode
 from .serializers import PodcastSerializer, EpisodeSerializer
 from .tasks import poll_feed, rehost_episode_audio
+from .views import create_podcast_from_url
 from pydub import AudioSegment
 
 class PodcastModelTest(TestCase):
@@ -170,50 +171,29 @@ class PodcastViewsTest(TestCase):
             ad_segments='[]'
         )
 
-    @mock.patch('podcasts.views.feedparser.parse')
-    @mock.patch('podcasts.views.poll_feed.delay')
-    def test_podcast_subscription_api_view_post_success(self, mock_poll_feed_delay, mock_feedparser_parse):
-        mock_feedparser_parse.return_value = mock.Mock(
-            bozo=0,
-            feed={'title': 'New Podcast', 'image': {'href': 'http://example.com/new_artwork.jpg'}}
-        )
-
+    @mock.patch('podcasts.views.create_podcast_from_url')
+    def test_podcast_subscription_api_view_post_success(self, mock_create_podcast):
         data = {'rss_url': 'http://example.com/new_podcast_feed.xml'}
-        response = self.client.post(reverse('podcasts:podcast-subscribe'), data, format='json')
+        response = self.client.post(reverse('podcast-subscribe-api'), data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(Podcast.objects.count(), 2)
-        mock_poll_feed_delay.assert_called_once()
+        mock_create_podcast.assert_called_once_with('http://example.com/new_podcast_feed.xml')
 
-    @mock.patch('podcasts.views.feedparser.parse')
-    def test_podcast_subscription_api_view_post_invalid_feed(self, mock_feedparser_parse):
-        mock_feedparser_parse.return_value = mock.Mock(
-            bozo=1,
-            bozo_exception='Malformed feed'
-        )
+    @mock.patch('podcasts.views.create_podcast_from_url')
+    def test_podcast_subscription_api_view_post_invalid_feed(self, mock_create_podcast):
+        mock_create_podcast.side_effect = ValueError("Invalid Feed")
         data = {'rss_url': 'http://example.com/invalid_feed.xml'}
-        response = self.client.post(reverse('podcasts:podcast-subscribe'), data, format='json')
+        response = self.client.post(reverse('podcast-subscribe-api'), data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('Could not fetch or parse the feed', str(response.data))
 
-    @mock.patch('podcasts.views.feedparser.parse')
-    def test_podcast_subscription_api_view_post_no_title(self, mock_feedparser_parse):
-        mock_feedparser_parse.return_value = mock.Mock(
-            bozo=0,
-            feed={}
-        )
-        data = {'rss_url': 'http://example.com/no_title_feed.xml'}
-        response = self.client.post(reverse('podcasts:podcast-subscribe'), data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('Could not find a title in the parsed feed', str(response.data))
-
     def test_podcast_subscription_api_view_get(self):
-        response = self.client.get(reverse('podcasts:podcast-subscribe'))
+        response = self.client.get(reverse('podcast-subscribe-api'))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]['title'], self.podcast.title)
 
     def test_podcast_rss_feed_view(self):
-        response = self.client.get(reverse('podcasts:podcast-rss-feed', kwargs={'podcast_id': self.podcast.id}))
+        response = self.client.get(reverse('podcast-rss-feed-api', kwargs={'podcast_id': self.podcast.id}))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response['Content-Type'], 'application/xml')
         self.assertIn(f'<title>{self.podcast.title} (Ad-Free)</title>', response.content.decode())
@@ -221,12 +201,12 @@ class PodcastViewsTest(TestCase):
 
     def test_podcast_rss_feed_view_not_found(self):
         non_existent_uuid = uuid.uuid4()
-        url = reverse('podcasts:podcast-rss-feed', kwargs={'podcast_id': non_existent_uuid})
+        url = reverse('podcast-rss-feed-api', kwargs={'podcast_id': non_existent_uuid})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_podcast_status_api_view(self):
-        url = reverse('podcasts:podcast-status', kwargs={'podcast_id': self.podcast.id})
+        url = reverse('podcast-status-api', kwargs={'podcast_id': self.podcast.id})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['id'], str(self.podcast.id))
@@ -237,7 +217,7 @@ class PodcastViewsTest(TestCase):
 
     def test_podcast_status_api_view_not_found(self):
         non_existent_uuid = uuid.uuid4()
-        response = self.client.get(reverse('podcasts:podcast-status', kwargs={'podcast_id': non_existent_uuid}))
+        response = self.client.get(reverse('podcast-status-api', kwargs={'podcast_id': non_existent_uuid}))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 class PodcastTasksTest(TestCase):
@@ -510,3 +490,122 @@ class PodcastTasksTest(TestCase):
         non_existent_uuid = uuid.uuid4()
         result = rehost_episode_audio(non_existent_uuid)
         self.assertIn("does not exist", result)
+
+class PodcastUITest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.podcast = Podcast.objects.create(
+            title="UI Test Podcast",
+            rss_url="http://example.com/ui_feed.xml",
+        )
+
+    def test_subscribe_ui_get(self):
+        response = self.client.get(reverse('podcast-subscribe-ui'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "Subscribe to a New Podcast")
+        self.assertContains(response, self.podcast.title)
+
+    @mock.patch('podcasts.views.create_podcast_from_url')
+    def test_subscribe_ui_post_success(self, mock_create_podcast):
+        new_podcast_id = uuid.uuid4()
+        mock_create_podcast.return_value = Podcast(id=new_podcast_id, title="New Podcast")
+        
+        data = {'rss_url': 'http://example.com/new_ui_feed.xml'}
+        response = self.client.post(reverse('podcast-subscribe-ui'), data)
+        
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        self.assertEqual(response.url, reverse('podcast-status-ui', kwargs={'podcast_id': new_podcast_id}))
+        mock_create_podcast.assert_called_once_with('http://example.com/new_ui_feed.xml')
+
+    @mock.patch('podcasts.views.create_podcast_from_url')
+    def test_subscribe_ui_post_failure(self, mock_create_podcast):
+        mock_create_podcast.side_effect = Exception("Test Error")
+        
+        data = {'rss_url': 'http://example.com/bad_feed.xml'}
+        response = self.client.post(reverse('podcast-subscribe-ui'), data)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, "Test Error")
+
+    def test_status_ui_view(self):
+        response = self.client.get(reverse('podcast-status-ui', kwargs={'podcast_id': self.podcast.id}))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertContains(response, self.podcast.title)
+
+class CreatePodcastFromUrlTest(TestCase):
+    @mock.patch('podcasts.views.poll_feed.delay')
+    @mock.patch('podcasts.views.feedparser.parse')
+    def test_create_podcast_from_url_success(self, mock_feedparser_parse, mock_poll_feed_delay):
+        mock_feedparser_parse.return_value = mock.Mock(
+            bozo=0,
+            feed={'title': 'New Podcast', 'image': {'href': 'http://example.com/new_artwork.jpg'}}
+        )
+        
+        podcast = create_podcast_from_url('http://example.com/new_podcast_feed.xml')
+        
+        self.assertIsInstance(podcast, Podcast)
+        self.assertEqual(podcast.title, "New Podcast")
+        self.assertEqual(Podcast.objects.count(), 1)
+        mock_poll_feed_delay.assert_called_once_with(podcast.id)
+
+    @mock.patch('podcasts.views.feedparser.parse')
+    def test_create_podcast_from_url_already_exists(self, mock_feedparser_parse):
+        Podcast.objects.create(rss_url="http://example.com/existing.xml", title="Existing")
+        mock_feedparser_parse.return_value = mock.Mock(bozo=0, feed={'title': 'Does not matter'})
+
+        podcast = create_podcast_from_url("http://example.com/existing.xml")
+        
+        self.assertEqual(Podcast.objects.count(), 1)
+        self.assertEqual(podcast.title, "Existing")
+
+class PollFeedEpisodeLimitTest(TestCase):
+    def setUp(self):
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/feed.xml"
+        )
+
+    def _create_mock_feed(self, entries):
+        return mock.Mock(
+            bozo=0,
+            entries=entries
+        )
+
+    def _create_mock_entry(self, guid, title, audio_url, pub_date_tuple):
+        entry_data = {
+            "id": guid,
+            "guid": guid,
+            "title": title,
+            "published_parsed": time.struct_time(pub_date_tuple) if pub_date_tuple else None,
+        }
+        enclosures = []
+        if audio_url:
+            enclosures.append({"type": "audio/mpeg", "href": audio_url})
+
+        mock_entry = mock.Mock(**entry_data)
+        mock_entry.get.side_effect = lambda key, default=None: {
+            "id": guid,
+            "guid": guid,
+            "title": title,
+            "published_parsed": time.struct_time(pub_date_tuple) if pub_date_tuple else None,
+            "enclosures": enclosures
+        }.get(key, default)
+        return mock_entry
+
+    @mock.patch('podcasts.tasks.rehost_episode_audio.delay')
+    @mock.patch('podcasts.tasks.feedparser.parse')
+    def test_poll_feed_limits_episodes(self, mock_feedparser_parse, mock_rehost_delay):
+        entry1 = self._create_mock_entry("guid1", "Episode 1", "http://example.com/ep1.mp3", (2024, 1, 3, 12, 0, 0, 1, 3, 0))
+        entry2 = self._create_mock_entry("guid2", "Episode 2", "http://example.com/ep2.mp3", (2024, 1, 2, 12, 0, 0, 1, 2, 0))
+        entry3 = self._create_mock_entry("guid3", "Episode 3", "http://example.com/ep3.mp3", (2024, 1, 1, 12, 0, 0, 1, 1, 0))
+        
+        mock_feed = self._create_mock_feed([entry1, entry2, entry3])
+        mock_feedparser_parse.return_value = mock_feed
+
+        poll_feed(self.podcast.id)
+
+        self.assertEqual(Episode.objects.count(), 2)
+        self.assertTrue(Episode.objects.filter(guid="guid1").exists())
+        self.assertTrue(Episode.objects.filter(guid="guid2").exists())
+        self.assertFalse(Episode.objects.filter(guid="guid3").exists())
+        self.assertEqual(mock_rehost_delay.call_count, 2)

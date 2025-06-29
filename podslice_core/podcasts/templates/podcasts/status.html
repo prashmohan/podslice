@@ -1,0 +1,65 @@
+{% extends 'podcasts/base.html' %}
+
+{% block title %}Podcast Status: {{ podcast.title }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <h3 class="card-title mb-0">{{ podcast.title }}</h3>
+                <a href="{% url 'podcast-subscribe-ui' %}" class="btn btn-sm btn-outline-secondary">Back to Subscriptions</a>
+            </div>
+            <div class="card-body">
+                <div class="d-flex">
+                    {% if podcast.artwork_url %}
+                        <img src="{{ podcast.artwork_url }}" alt="{{ podcast.title }} artwork" class="img-thumbnail me-3" style="width: 150px; height: 150px;">
+                    {% endif %}
+                    <div>
+                        <p><strong>RSS URL:</strong> <a href="{{ podcast.rss_url }}" target="_blank">{{ podcast.rss_url }}</a></p>
+                        <p><strong>Overall Status:</strong> <span class="badge bg-info">{{ podcast.get_status_display }}</span></p>
+                        <p><strong>Generated RSS:</strong> 
+                            <a href="{% url 'podcast-rss-feed-api' podcast.id %}" target="_blank">
+                                {% url 'podcast-rss-feed-api' podcast.id %}
+                            </a>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-4 shadow-sm">
+            <div class="card-header">
+                <h4 class="card-title mb-0">Episodes</h4>
+            </div>
+            <div class="list-group list-group-flush">
+                {% for episode in episodes %}
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h5 class="mb-1">{{ episode.title }}</h5>
+                            <small class="text-muted">{{ episode.pub_date|date:"Y-m-d" }}</small>
+                        </div>
+                        <p class="mb-1">
+                            <span class="badge rounded-pill 
+                                {% if episode.status == 'COMPLETE' %}bg-success
+                                {% elif episode.status == 'FAILED' %}bg-danger
+                                {% else %}bg-secondary
+                                {% endif %}">
+                                {{ episode.get_status_display }}
+                            </span>
+                        </p>
+                        {% if episode.rehosted_audio_url %}
+                            <audio controls preload="none" class="mt-2" style="width: 100%;">
+                                <source src="{{ episode.rehosted_audio_url }}" type="audio/mpeg">
+                                Your browser does not support the audio element.
+                            </audio>
+                        {% endif %}
+                    </div>
+                {% empty %}
+                    <div class="list-group-item">No episodes found yet. The feed may be processing.</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

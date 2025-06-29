@@ -16,10 +16,9 @@ Including another URLconf
 """
 
 from django.contrib import admin
-from django.urls import path, include # Add 'include'
+from django.urls import path, include
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    # Add this line to route all /api/ requests to the podcasts app
-    path('api/', include(('podcasts.urls', 'podcasts'))),
+    path('', include('podcasts.urls')),
 ]

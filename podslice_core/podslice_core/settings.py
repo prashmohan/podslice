@@ -139,7 +139,7 @@ if not GEMINI_API_KEY:
     raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
 
 # Base URL for the rehost service
-REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://localhost:8001")
+REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://192.168.68.83:12342")
 
       
 # Celery Configuration
@@ -171,6 +171,6 @@ LOGGING = {
     },
     'root': {
         'handlers': ['console'],
-        'level': 'INFO', # You can set this to 'DEBUG' for even more verbosity
+        'level': 'DEBUG', # You can set this to 'DEBUG' for even more verbosity
     },
 }

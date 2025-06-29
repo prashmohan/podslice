@@ -31,104 +31,66 @@ def poll_feed(podcast_id):
     This task is idempotent: running it multiple times will not create
     duplicate episodes.
     """
-    # 1. Retrieve the Podcast object
+    logger.info(f"Starting poll for Podcast ID: {podcast_id}")
     try:
         podcast = Podcast.objects.get(id=podcast_id)
-        logger.info(f"Starting poll for Podcast '{podcast.title}' (ID: {podcast_id})")
+        logger.info(f"Polling feed for podcast: '{podcast.title}'")
     except Podcast.DoesNotExist:
         logger.error(f"Podcast with ID {podcast_id} not found. Aborting task.")
-        return f"Error: Podcast with ID {podcast_id} does not exist."
+        return
 
-    # 2. Fetch and Parse the RSS Feed
     try:
+        logger.debug(f"Fetching RSS feed from {podcast.rss_url}")
         feed = feedparser.parse(podcast.rss_url, agent=BROWSER_USER_AGENT)
         if feed.bozo:
-            # The 'bozo' bit is set if the feed is malformed.
-            raise ValueError(
-                f"Feed is malformed. Reason: {feed.get('bozo_exception', 'Unknown')}"
-            )
-    except (IOError, ValueError) as e:
-        logger.error(f"Failed to fetch or parse feed for '{podcast.title}': {e}")
-        return f"Error processing feed for Podcast ID {podcast_id}: {e}"
+            logger.error(f"Malformed feed for '{podcast.title}'. Reason: {feed.get('bozo_exception', 'Unknown')}")
+            return
+    except Exception as e:
+        logger.error(f"Failed to fetch or parse feed for '{podcast.title}': {e}", exc_info=True)
+        return
 
-    # 3. Process Feed Entries and Create Episodes
     new_episodes_count = 0
     skipped_episodes_count = 0
+    logger.info(f"Processing the latest {2} episodes from '{podcast.title}'.")
 
-    for entry in feed.entries:
-        # --- A. Extract GUID (unique identifier for an episode) ---
+    for entry in feed.entries[:2]:
         guid = entry.get("id")
         if not guid:
-            logger.warning(
-                f"Skipping entry in '{podcast.title}' due to missing GUID. "
-                f"Title: '{entry.get('title', 'N/A')}'"
-            )
+            logger.warning(f"Skipping entry in '{podcast.title}' due to missing GUID. Title: '{entry.get('title', 'N/A')}'")
             continue
 
-        # --- B. Extract Audio URL from enclosures ---
-        audio_url = None
-        for enclosure in entry.get("enclosures", []):
-            if enclosure.get("type", "").startswith("audio"):
-                audio_url = enclosure.get("href")
-                break  # Found an audio enclosure, stop looking
-
+        audio_url = next((enclosure.get("href") for enclosure in entry.get("enclosures", []) if enclosure.get("type", "").startswith("audio")), None)
         if not audio_url:
-            logger.warning(
-                f"Skipping entry '{entry.get('title', 'N/A')}' (GUID: {guid}) "
-                f"in '{podcast.title}' due to missing audio enclosure."
-            )
+            logger.warning(f"Skipping entry '{entry.get('title', 'N/A')}' (GUID: {guid}) in '{podcast.title}' due to missing audio enclosure.")
             continue
 
-        # --- C. Extract and parse publication date ---
-        pub_date = None
-        if hasattr(entry, "published_parsed") and entry.published_parsed:
-            # Convert time.struct_time to a naive datetime object
-            dt_naive = datetime.fromtimestamp(time.mktime(entry.published_parsed))
-            # Make it timezone-aware using Django's current timezone setting
-            pub_date = timezone.make_aware(dt_naive, timezone.get_current_timezone())
-        else:
-            logger.warning(
-                f"Skipping entry '{entry.get('title', 'N/A')}' (GUID: {guid}) "
-                f"in '{podcast.title}' due to missing publication date."
-            )
+        pub_date_parsed = entry.get("published_parsed")
+        if not pub_date_parsed:
+            logger.warning(f"Skipping entry '{entry.get('title', 'N/A')}' (GUID: {guid}) in '{podcast.title}' due to missing publication date.")
             continue
+        
+        pub_date = timezone.make_aware(datetime.fromtimestamp(time.mktime(pub_date_parsed)), timezone.get_current_timezone())
 
-        # --- D. Atomically create the episode if it doesn't exist ---
-        # The 'guid' field has a unique constraint in the database, so this
-        # prevents duplicates across all podcasts.
         try:
-            episode_obj, created = Episode.objects.get_or_create(
+            episode, created = Episode.objects.get_or_create(
                 guid=guid,
                 defaults={
                     "podcast": podcast,
                     "title": entry.get("title", "Untitled Episode"),
                     "pub_date": pub_date,
                     "original_audio_url": audio_url,
-                    # The 'status' field defaults to 'NEW' as defined in the model
                 },
             )
             if created:
                 new_episodes_count += 1
-                logger.info(
-                    f"Created new episode for '{podcast.title}': '{entry.get('title')}'"
-                )
-                rehost_episode_audio.delay(episode_obj.id)
+                logger.info(f"New episode created: '{episode.title}' for podcast '{podcast.title}'. Dispatching rehost task.")
+                rehost_episode_audio.delay(episode.id)
             else:
                 skipped_episodes_count += 1
         except Exception as e:
-            # Catch potential integrity errors or other DB issues for a single episode
-            logger.error(
-                f"Failed to create episode with GUID {guid} for podcast '{podcast.title}'. Error: {e}",
-                exc_info=True,
-            )
+            logger.error(f"Failed to create episode with GUID {guid} for podcast '{podcast.title}'. Error: {e}", exc_info=True)
 
-    summary = (
-        f"Polling complete for '{podcast.title}'. "
-        f"Found {new_episodes_count} new episodes. "
-        f"Skipped {skipped_episodes_count} existing episodes."
-    )
-    logger.info(summary)
-    return summary
+    logger.info(f"Polling complete for '{podcast.title}'. Found {new_episodes_count} new episodes. Skipped {skipped_episodes_count} existing episodes.")
 
 
 @shared_task
@@ -137,18 +99,19 @@ def rehost_episode_audio(episode_id):
     Downloads an episode's audio, processes it to remove ads using Gemini,
     and re-hosts the ad-free audio.
     """
+    logger.info(f"Starting rehost task for Episode ID: {episode_id}")
     try:
         episode = Episode.objects.get(id=episode_id)
-        logger.info(f"Starting rehost for Episode '{episode.title}' (ID: {episode_id})")
+        logger.info(f"Processing episode: '{episode.title}' from podcast '{episode.podcast.title}'")
         episode.status = Episode.Status.DOWNLOADING
-        episode.save()
+        episode.save(update_fields=['status'])
     except Episode.DoesNotExist:
         logger.error(f"Episode with ID {episode_id} not found. Aborting rehost task.")
-        return f"Error: Episode with ID {episode_id} does not exist."
+        return
 
     temp_audio_path = None
     try:
-        # 1. Download the audio file from original_audio_url
+        logger.debug(f"Downloading audio from {episode.original_audio_url}")
         response = requests.get(episode.original_audio_url, stream=True)
         response.raise_for_status()
 
@@ -159,11 +122,11 @@ def rehost_episode_audio(episode_id):
                 audio_content += chunk
             temp_audio_path = temp_audio_file.name
         
-        logger.info(f"Downloaded audio for Episode {episode.id} to {temp_audio_path}")
+        logger.info(f"Audio for Episode {episode.id} downloaded to {temp_audio_path}")
         episode.status = Episode.Status.ANALYZING
-        episode.save()
+        episode.save(update_fields=['status'])
 
-        # 2. Send audio to Google Gemini API -> gets ad timestamps
+        logger.debug("Sending audio to Gemini for ad detection.")
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-2.5-pro')
         
@@ -180,10 +143,10 @@ def rehost_episode_audio(episode_id):
         ad_segments = response.text
         episode.ad_segments = ad_segments
         episode.status = Episode.Status.PROCESSING
-        episode.save()
+        episode.save(update_fields=['status', 'ad_segments'])
         logger.info(f"Gemini analysis complete for Episode {episode.id}. Ad segments: {ad_segments}")
 
-        # 3. Uses pydub to slice audio, removes ad segments
+        logger.debug("Slicing audio to remove ad segments.")
         ad_segments_list = json.loads(episode.ad_segments) if episode.ad_segments else []
         ad_segments_list.sort(key=lambda x: x['start'])
 
@@ -202,6 +165,7 @@ def rehost_episode_audio(episode_id):
 
         if not ad_segments_list:
             processed_audio = audio
+        logger.debug("Audio slicing complete.")
 
         output_suffix = ".mp3"
         output_mime_type = "audio/mpeg"
@@ -210,10 +174,10 @@ def rehost_episode_audio(episode_id):
         final_audio_filename = f"{uuid.uuid4()}{output_suffix}"
         final_audio_path = os.path.join(media_dir, final_audio_filename)
 
+        logger.debug(f"Exporting processed audio to {final_audio_path}")
         processed_audio.export(final_audio_path, format="mp3")
-        logger.info(f"Saved processed audio for Episode {episode.id} to {final_audio_path}")
-
-        # 6. Updates rehost SQLite DB with file info & URL
+        
+        logger.debug("Creating RehostedMedia entry in rehost_db.")
         media_guid = uuid.uuid4()
         RehostedMedia.objects.using('rehost_db').create(
             media_guid=media_guid,
@@ -222,20 +186,18 @@ def rehost_episode_audio(episode_id):
         )
         episode.rehosted_audio_url = f"{settings.REHOST_BASE_URL}/audio/{media_guid}/"
         episode.status = Episode.Status.COMPLETE
-        episode.save()
-
-        return f"Rehost completed for Episode ID {episode_id}."
+        episode.save(update_fields=['status', 'rehosted_audio_url'])
+        logger.info(f"Rehost completed successfully for Episode {episode.id}.")
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to download audio for Episode {episode.id}: {e}")
+        logger.error(f"Failed to download audio for Episode {episode.id}: {e}", exc_info=True)
         episode.status = Episode.Status.FAILED
-        episode.save()
-        return f"Error: Failed to download audio for Episode {episode.id}."
+        episode.save(update_fields=['status'])
     except Exception as e:
         logger.error(f"An error occurred during rehosting of Episode {episode.id}: {e}", exc_info=True)
         episode.status = Episode.Status.FAILED
-        episode.save()
-        return f"Error: An error occurred during rehosting of Episode {episode.id}."
+        episode.save(update_fields=['status'])
     finally:
         if temp_audio_path and os.path.exists(temp_audio_path):
+            logger.debug(f"Cleaning up temporary file: {temp_audio_path}")
             os.remove(temp_audio_path)
