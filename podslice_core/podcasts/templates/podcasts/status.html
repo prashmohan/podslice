@@ -8,7 +8,10 @@
         <div class="card shadow-sm">
             <div class="card-header bg-light d-flex justify-content-between align-items-center">
                 <h3 class="card-title mb-0">{{ podcast.title }}</h3>
-                <a href="{% url 'podcast-subscribe-ui' %}" class="btn btn-sm btn-outline-secondary">Back to Subscriptions</a>
+                <div>
+                    <a href="{% url 'podcast-subscribe-ui' %}" class="btn btn-sm btn-outline-secondary me-2">Back to Subscriptions</a>
+                    <button type="button" class="btn btn-sm btn-danger" id="deletePodcastBtn" data-podcast-id="{{ podcast.id }}">Delete Podcast</button>
+                </div>
             </div>
             <div class="card-body">
                 <div class="d-flex">
@@ -63,3 +66,29 @@
     </div>
 </div>
 {% endblock %}
+
+<script>
+    document.getElementById('deletePodcastBtn').addEventListener('click', function() {
+        if (confirm('Are you sure you want to delete this podcast subscription and all its associated audio files? This action cannot be undone.')) {
+            const podcastId = this.dataset.podcastId;
+            fetch(`/api/podcasts/${podcastId}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => {
+                if (response.ok) {
+                    alert('Podcast deletion initiated. It may take some time for all files to be removed.');
+                    window.location.href = '{% url "podcast-subscribe-ui" %}';
+                } else {
+                    alert('Error initiating podcast deletion.');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred during deletion.');
+            });
+        }
+    });
+</script>

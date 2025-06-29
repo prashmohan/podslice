@@ -182,8 +182,9 @@ def rehost_episode_audio(episode_id):
             content_type=output_mime_type,
         )
         episode.rehosted_audio_url = f"{settings.REHOST_BASE_URL}/audio/{media_guid}/"
+        episode.rehosted_media_id = media_guid
         episode.status = Episode.Status.COMPLETE
-        episode.save(update_fields=['status', 'rehosted_audio_url'])
+        episode.save(update_fields=['status', 'rehosted_audio_url', 'rehosted_media_id'])
         logger.info(f"Rehost completed successfully for Episode {episode.id}.")
 
     except requests.exceptions.RequestException as e:
@@ -198,3 +199,42 @@ def rehost_episode_audio(episode_id):
         if temp_audio_path and os.path.exists(temp_audio_path):
             logger.debug(f"Cleaning up temporary file: {temp_audio_path}")
             os.remove(temp_audio_path)
+
+def delete_podcast_data(podcast_id):
+    """
+    Deletes a podcast and all associated episodes, rehosted media entries, and audio files.
+    """
+    logger.info(f"Starting deletion task for Podcast ID: {podcast_id}")
+    try:
+        podcast = Podcast.objects.get(id=podcast_id)
+        logger.info(f"Found podcast '{podcast.title}' ({podcast.id}) for deletion.")
+
+        # Iterate through episodes to delete associated rehosted media and files
+        for episode in podcast.episodes.all():
+            if episode.rehosted_media_id:
+                try:
+                    rehosted_media = RehostedMedia.objects.using('rehost_db').get(media_guid=episode.rehosted_media_id)
+                    # Delete physical file
+                    if os.path.exists(rehosted_media.file_path):
+                        os.remove(rehosted_media.file_path)
+                        logger.info(f"Deleted physical file: {rehosted_media.file_path}")
+                    else:
+                        logger.warning(f"Physical file not found for deletion: {rehosted_media.file_path}")
+                    
+                    # Delete RehostedMedia entry from rehost_db
+                    rehosted_media.delete()
+                    logger.info(f"Deleted RehostedMedia entry for episode {episode.id} (GUID: {episode.rehosted_media_id})")
+                except RehostedMedia.DoesNotExist:
+                    logger.warning(f"RehostedMedia entry not found for episode {episode.id} (GUID: {episode.rehosted_media_id}). Skipping file deletion.")
+                except Exception as e:
+                    logger.error(f"Error deleting rehosted media for episode {episode.id}: {e}", exc_info=True)
+
+        # Finally, delete the podcast object (this will cascade delete episodes in podslice_core db)
+        podcast_title = podcast.title # Store title before deletion for logging
+        podcast.delete()
+        logger.info(f"Successfully deleted podcast '{podcast_title}' ({podcast_id}) and all its episodes.")
+
+    except Podcast.DoesNotExist:
+        logger.error(f"Podcast with ID {podcast_id} not found. Aborting deletion task.")
+    except Exception as e:
+        logger.error(f"An error occurred during podcast deletion for ID {podcast_id}: {e}", exc_info=True)

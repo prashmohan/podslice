@@ -59,6 +59,7 @@ class EpisodeModelTest(TestCase):
         self.assertEqual(self.episode.original_audio_url, "http://example.com/audio.mp3")
         self.assertEqual(self.episode.status, Episode.Status.NEW)
         self.assertIsNone(self.episode.rehosted_audio_url)
+        self.assertIsNone(self.episode.rehosted_media_id)
         self.assertIsNone(self.episode.ad_segments)
         self.assertIsNotNone(self.episode.created_at)
         self.assertIsNotNone(self.episode.updated_at)
@@ -97,6 +98,7 @@ class PodcastSerializerTest(TestCase):
             original_audio_url="http://example.com/existing_audio.mp3",
             status=Episode.Status.COMPLETE,
             rehosted_audio_url="http://rehost.example.com/audio/123/",
+            rehosted_media_id=uuid.uuid4(),
             ad_segments='[]'
         )
 
@@ -218,6 +220,42 @@ class PodcastViewsTest(TestCase):
     def test_podcast_status_api_view_not_found(self):
         non_existent_uuid = uuid.uuid4()
         response = self.client.get(reverse('podcast-status-api', kwargs={'podcast_id': non_existent_uuid}))
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @mock.patch('podcasts.views.delete_podcast_data')
+    def test_podcast_delete_api_view(self, mock_delete_podcast_data):
+        # Create a podcast to delete
+        podcast_to_delete = Podcast.objects.create(
+            title="Podcast to Delete",
+            rss_url="http://example.com/delete_feed.xml",
+            artwork_url="http://example.com/delete_artwork.jpg"
+        )
+        # Create an episode for the podcast
+        Episode.objects.create(
+            podcast=podcast_to_delete,
+            title="Episode to Delete",
+            guid=str(uuid.uuid4()),
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/delete_audio.mp3",
+            status=Episode.Status.COMPLETE,
+            rehosted_audio_url="http://rehost.example.com/audio/delete/",
+            rehosted_media_id=uuid.uuid4(),
+            ad_segments='[]'
+        )
+
+        url = reverse('podcast-delete-api', kwargs={'podcast_id': podcast_to_delete.id})
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        mock_delete_podcast_data.assert_called_once_with(podcast_to_delete.id)
+        # Verify that the podcast still exists in the DB immediately after the API call
+        # because deletion is dispatched to a background task.
+        self.assertTrue(Podcast.objects.filter(id=podcast_to_delete.id).exists())
+
+    def test_podcast_delete_api_view_not_found(self):
+        non_existent_uuid = uuid.uuid4()
+        url = reverse('podcast-delete-api', kwargs={'podcast_id': non_existent_uuid})
+        response = self.client.delete(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 class PodcastTasksTest(TestCase):

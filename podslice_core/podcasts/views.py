@@ -13,7 +13,7 @@ from datetime import datetime
 
 from .models import Podcast, Episode
 from .serializers import PodcastSerializer
-from .tasks import poll_feed
+from .tasks import poll_feed, delete_podcast_data
 
 logger = logging.getLogger(__name__)
 
@@ -146,3 +146,19 @@ class PodcastStatusAPIView(generics.RetrieveAPIView):
     serializer_class = PodcastSerializer
     lookup_field = 'id'
     lookup_url_kwarg = 'podcast_id'
+
+class PodcastDeleteAPIView(generics.DestroyAPIView):
+    """
+    API view to delete a podcast subscription and its associated data.
+    Handles DELETE /api/podcasts/<uuid:podcast_id>/
+    """
+    queryset = Podcast.objects.all()
+    lookup_field = 'id'
+    lookup_url_kwarg = 'podcast_id'
+
+    def perform_destroy(self, instance):
+        podcast_id = instance.id
+        # Dispatch the deletion task to run in the background
+        deletion_thread = threading.Thread(target=delete_podcast_data, args=(podcast_id,))
+        deletion_thread.start()
+        logger.info(f"Dispatched deletion task for Podcast ID: {podcast_id}")
