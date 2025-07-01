@@ -33,7 +33,7 @@ To maintain focus and simplicity, this project will explicitly **not** include:
 ### 1.4. Guiding Principles
 
 * **Simplicity Over Complexity:** We will always prefer simpler, self-contained solutions over those that introduce external dependencies unless absolutely necessary. The choice of SQLite and a filesystem message broker are direct results of this principle.
-* **Decoupled Architecture:** Services should be independent and communicate via well-defined interfaces. The separation of `podslice_core` and `podslice_rehost` embodies this.
+* **Decoupled Architecture:** Services should be independent and communicate via well-defined interfaces.
 * **Asynchronous Processing:** The system must remain responsive. Any long-running operation (>500ms) must be offloaded to a background process.
 * **Idempotency and Fault Tolerance:** Tasks should be designed to be safely retried without creating duplicate data or unintended side effects.
 
@@ -57,8 +57,8 @@ Our primary user, "Alex," is a technically savvy podcast listener. Alex is comfo
 ### 2.3. Error & Edge Case Journeys
 
 * **Invalid URL Submission:** Alex accidentally provides a malformed URL or a URL that doesn't point to a valid RSS feed. The API should immediately reject the request with a `400 Bad Request` error and a clear message.
-* **Episode Download Failure:** An episode's audio file is missing from the original server (404 error). The Celery worker should mark that specific episode as `FAILED` in the database, log the error, and move on to the next episode. The overall podcast job should still complete, providing a feed of the successfully processed episodes.
-* **AI Service Failure:** The Gemini API is temporarily unavailable or returns an error. The Celery task should implement a retry mechanism with exponential backoff. If it ultimately fails after several retries, the episode is marked as `FAILED`.
+* **Episode Download Failure:** An episode's audio file is missing from the original server (404 error). The background thread should mark that specific episode as `FAILED` in the database, log the error, and move on to the next episode. The overall podcast job should still complete, providing a feed of the successfully processed episodes.
+* **AI Service Failure:** The Gemini API is temporarily unavailable or returns an error. The processing task should implement a retry mechanism with exponential backoff. If it ultimately fails after several retries, the episode is marked as `FAILED`.
 * **Audio Without Ads:** The AI service analyzes an episode and finds no ads. The system should gracefully handle this by skipping the audio processing step and simply re-hosting the original, unchanged audio file.
 
 ---
@@ -78,17 +78,17 @@ The architecture is composed of a single monolithic Django service, a shared fil
 |       - Serves rehosted media        |
 +--------------------------------------+
 |         ^           |
-| R/W     | R         | (1) Enqueues Task
+| R/W     | R         | (1) Spawns Background Thread
 v         |           v
 +----------------+   +-----------------------------+
-| SQLite DB      |   | Celery Filesystem Broker    |
-|                |   |  (/celery_broker directory) |
+| SQLite DB      |   | In-Memory Queue             |
+|                |   |                             |
 +----------------+   +-----------------------------+
                                   |
-                                  | (2) Worker Pulls Task
+                                  | (2) Thread Pulls Task
                                   v
 +--------------------------------------------------------------------------+
-|                              Celery Worker                               |
+|                          Background Thread                               |
 |--------------------------------------------------------------------------|
 | 3. Downloads original_audio_url                                          |
 | 4. Sends audio to Google Gemini API -> gets ad timestamps                |
@@ -103,7 +103,7 @@ v         |           v
 
 * **`podslice_core` (The Monolith):** This Django project is the user's sole point of interaction. It validates input, manages the state of all processing jobs, orchestrates the background workers, and serves the final rehosted media files.
 
-* **Asynchronous Task Processing:** We use Celery with the filesystem broker. **Justification:** This is a cornerstone of the "simplicity" principle. It removes the need to install, configure, and maintain a separate service like Redis or RabbitMQ. For the expected workload of this service, the performance of the filesystem broker is more than sufficient and its operational simplicity is a major advantage.
+* **Asynchronous Task Processing:** We use background threads and an in-memory queue. **Justification:** This is a cornerstone of the "simplicity" principle. It removes the need to install, configure, and maintain a separate service like Redis or RabbitMQ. For the expected workload of this service, the performance of background threads is more than sufficient and its operational simplicity is a major advantage.
 
 * **Data Persistence:** We use a single SQLite database. **Justification:** This reinforces the monolithic nature of the architecture. SQLite is chosen for its zero-configuration, serverless nature, which perfectly aligns with the project's goal of being a simple, self-contained application.
 
@@ -112,28 +112,25 @@ v         |           v
 This diagram illustrates the precise flow of control and data between the components.
 
 ```
-User          podslice_core API     Celery Broker        Celery Worker         Gemini API
-|                    |                    |                    |                    |
-+--POST /podcasts--->|                    |                    |                    |
-|                    +--Create Podcast--->|                    |                    |
-|                    +--process_feed.delay()------------------->|                    |
-|<--202 Accepted----+                    |                    |                    |
-|                    |                    +----Pulls Task----->|                    |
-|                    |                    |                    +--Fetch/Parse RSS-->|
-|                    |                    |                    +-rehost_audio.delay()------------------>|
-|                    |                    |                    |                    |
-|                    |                    |                    +----Pulls Task----->|
-|                    |                    |                    |                    +---Analyze Audio-->|
-|                    |                    |                    |                    |<----Timestamps----+
-|                    |                    |                    +--Process w/ pydub->|
-|                    |                    |                    +--Write to DB------>|
-|                    |                    |                    |                    |
-+--GET /feeds/id---->|                    |                    |                    |
-|<----New RSS Feed---+                    |                    |                    |
-|                    |                    |                    |                    |
-| (Podcast Client)   |                    |                    |                    |
-+--GET /media/id---->|                    |                    |                    |
-|<----Audio File-----+                    |                    |                    |
+User          podslice_core API     Background Thread    Gemini API
+|                    |                    |                    |
++--POST /podcasts--->|                    |                    |
+|                    +--Create Podcast--->|                    |
+|                    +--process_feed()---->|                    |
+|<--202 Accepted----+                    |                    |
+|                    |                    +--Fetch/Parse RSS-->|
+|                    |                    +-rehost_audio()----->|
+|                    |                    |                    +---Analyze Audio-->|
+|                    |                    |                    |<----Timestamps----+
+|                    |                    +--Process w/ pydub->|
+|                    |                    +--Write to DB------>|
+|                    |                    |                    |
++--GET /feeds/id---->|                    |                    |
+|<----New RSS Feed---+                    |                    |
+|                    |                    |                    |
+| (Podcast Client)   |                    |                    |
++--GET /media/id---->|                    |                    |
+|<----Audio File-----+                    |                    |
 ```
 ## 4. Data Models & Schemas
 
@@ -151,7 +148,7 @@ User          podslice_core API     Celery Broker        Celery Worker         G
     * `podcast` (ForeignKey to `Podcast`): Links the episode to its parent podcast.
     * `title` (CharField): The episode title.
     * `original_audio_url` (URLField): The original source URL of the audio file.
-    * `rehosted_audio_url` (URLField, nullable): The final public URL pointing to the `podslice_rehost` server.
+    * `rehosted_audio_url` (URLField, nullable): The final public URL pointing to the server.
     * `ad_segments` (JSONField, nullable): Stores the list of ad timestamps from Gemini. E.g., `[{"start": 60.5, "end": 95.0}, {"start": 1800.2, "end": 1830.0}]`.
     * `status` (CharField): The status of the individual episode job. Choices: `PENDING`, `DOWNLOADING`, `ANALYZING`, `PROCESSING`, `COMPLETED`, `FAILED`.
     * `created_at`, `updated_at` (DateTimeField).
@@ -171,12 +168,12 @@ A robust testing strategy is non-negotiable. We will employ a multi-layered appr
 
 * **Models:** Test model creation, validation logic, and custom methods.
 * **Serializers:** Test validation, including handling of invalid URLs.
-* **Tasks:** Test the core logic of each Celery task in isolation, mocking out external dependencies like `requests.get`, the Gemini API client, and database connections.
+* **Tasks:** Test the core logic of each background task in isolation, mocking out external dependencies like `requests.get`, the Gemini API client, and database connections.
 
 ### 5.2. Integration Tests
 
-* **API to Celery:** Test that a successful API call correctly creates a `Podcast` object and enqueues the `process_podcast_feed` task with the right parameters.
-* **Worker to Databases:** Test that the Celery worker can successfully read from the `podslice_core` database and write to *both* the `core` and `rehost` databases within a single task.
+* **API to Background Thread:** Test that a successful API call correctly creates a `Podcast` object and starts the `process_podcast_feed` task with the right parameters.
+* **Worker to Databases:** Test that the background thread can successfully read from and write to the database.
 
 ### 5.3. End-to-End (E2E) Tests
 
@@ -206,27 +203,19 @@ This project is broken down into four distinct, executable phases.
 * **Tasks:**
     1.  **Setup `podslice_core` Project:** Initialize the Django project and the `podcasts` app. Configure the SQLite database.
     2.  **Define Models:** Implement the `Podcast` and `Episode` models in `podcasts/models.py`. Generate and run the initial migration.
-    3.  **Setup Celery:** Configure Celery with the filesystem broker in `settings.py`. Create `celery.py` and modify `__init__.py`.
-    4.  **Implement Submission API:** Create the serializer and view for the `POST /api/podcasts/` endpoint. Initially, it will only create the `Podcast` object.
-    5.  **Implement Stub Task:** Create the `process_podcast_feed` task, but have it only parse the feed and create `Episode` objects without dispatching sub-tasks.
-    6.  **Connect API to Task:** Wire the submission API to enqueue the `process_podcast_feed` task.
+    3.  **Implement Submission API:** Create the serializer and view for the `POST /api/podcasts/` endpoint. Initially, it will only create the `Podcast` object.
+    4.  **Implement Stub Task:** Create the `process_podcast_feed` task, but have it only parse the feed and create `Episode` objects without dispatching sub-tasks.
+    5.  **Connect API to Task:** Wire the submission API to start the `process_podcast_feed` task in a background thread.
 
-### Phase 2: Re-hosting Service & File Serving (`podslice_rehost`)
 
-* **Goal:** Build the independent service responsible for serving the final audio files.
-* **Tasks:**
-    1.  **Setup `podslice_rehost` Project:** Initialize the Django project and the `rehost_app`.
-    2.  **Define Re-host Model:** Implement the `RehostedMedia` model and run its migration.
-    3.  **Implement Serving View:** Create the view that takes a `media_guid`, looks up the file path in its database, and returns a `FileResponse`.
-    4.  **Configure URLs:** Set up the URL pattern to route requests to the serving view.
 
 ### Phase 3: The Worker Pipeline (The "Magic")
 
-* **Goal:** Implement the full, multi-step audio processing logic within the Celery worker.
+* **Goal:** Implement the full, multi-step audio processing logic within a background thread.
 * **Tasks:**
-    1.  **Implement `rehost_episode_audio` Task:** Create the new Celery task.
+    1.  **Implement `rehost_episode_audio` Task:** Create the new background task.
     2.  **Audio Download:** Add logic to download the audio file from `original_audio_url`.
-    3.  **Database Bridge:** Implement the logic for the worker to connect to the `podslice_rehost` SQLite database. This will require careful configuration management to pass the database path.
+    
     4.  **Gemini Integration:** Write the client code to send the audio file to the Gemini API and parse the timestamp response. Securely manage the API key.
     5.  **Audio Slicing:** Use `pydub` to implement the ad removal based on the Gemini timestamps. Add logic to handle cases where no ads are found.
     6.  **Finalize and Connect:** Update the `process_podcast_feed` task to dispatch the `rehost_episode_audio` task for each episode.

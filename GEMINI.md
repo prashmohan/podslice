@@ -4,8 +4,7 @@ This document provides guidance for agents interacting with the Podslice codebas
 
 Podslice is a Django-based application designed to download podcast episodes, slice them into smaller audio segments, and rehost them. It is composed of two main Django projects:
 
--   `podslice_core`: Handles the core logic of fetching podcast feeds, processing episodes, and managing the slicing tasks. It uses Celery for asynchronous processing.
--   `podslice_rehost`: A lightweight Django project responsible for serving the sliced audio files.
+-   `podslice_core`: Handles the core logic of fetching podcast feeds, processing episodes, and managing the slicing tasks.
 
 ## Agent Persona & Tone
 
@@ -24,7 +23,7 @@ Podslice is a Django-based application designed to download podcast episodes, sl
 ## Key Technologies
 
 -   **Backend:** Django, Django REST Framework
--   **Asynchronous Tasks:** Celery
+-   **Asynchronous Tasks**
 -   **Libraries:**
     -   `feedparser`: For parsing podcast RSS feeds.
     -   `requests`: For making HTTP requests.
@@ -35,31 +34,16 @@ Podslice is a Django-based application designed to download podcast episodes, sl
 
 ### Running the Core Application
 
-To run the main application, you will need to start the Django development server and a Celery worker.
+To run the main application, you will need to start the Django development server.
 
 1.  **Start the Django Server:**
     ```bash
     python podslice_core/manage.py runserver
     ```
 
-2.  **Start the Celery Worker:**
-    ```bash
-    celery -A podslice_core.podslice_core worker -l info
-    ```
-
-### Running the Rehosting Application
-
-To serve the sliced audio files, run the development server for the rehosting app:
-
-```bash
-python podslice_rehost/manage.py runserver 8001
-```
-
-(Note: It's common to run the rehosting server on a different port to avoid conflicts with the core application.)
-
 ### Creating New Migrations
 
-When you change a model in either `podslice_core` or `podslice_rehost`, you will need to create a new database migration.
+When you change a model, you will need to create a new database migration.
 
 For `podslice_core`:
 
@@ -67,11 +51,7 @@ For `podslice_core`:
 python podslice_core/manage.py makemigrations
 ```
 
-For `podslice_rehost`:
 
-```bash
-python podslice_rehost/manage.py makemigrations
-```
 
 ### Applying Migrations
 
@@ -83,15 +63,10 @@ For `podslice_core`:
 python podslice_core/manage.py migrate
 ```
 
-For `podslice_rehost`:
 
-```bash
-python podslice_rehost/manage.py migrate
-```
 
 ## Code Style and Conventions
 
 -   Follow Django's coding style.
 -   Keep models, views, and serializers in their respective files.
--   Use Celery for any long-running tasks to avoid blocking web requests.
 -   Write tests for new features and bug fixes.

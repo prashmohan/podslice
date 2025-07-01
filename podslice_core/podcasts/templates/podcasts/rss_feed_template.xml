@@ -18,7 +18,7 @@
             <guid isPermaLink="false">{{ episode.guid }}</guid>
             <pubDate>{{ episode.pub_date|date:"D, d M Y H:i:s O" }}</pubDate>
             <description>Ad-free version of {{ episode.title }}</description>
-            <enclosure url="{{ episode.rehosted_audio_url }}" length="0" type="audio/mpeg" />
+            <enclosure url="{{ episode.rehosted_audio_url }}" length="{{ episode.rehosted_audio_size }}" type="audio/mpeg" />
         </item>
         {% endfor %}
     </channel>

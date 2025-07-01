@@ -642,3 +642,50 @@ class RehostedMediaViewTest(TestCase):
         url = reverse('serve_media_episode', kwargs={'media_guid': non_existent_uuid})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+import uuid
+from unittest.mock import patch, MagicMock
+from django.test import TestCase
+from django.conf import settings
+from django.urls import reverse
+from .models import Podcast, Episode, RehostedMedia
+from .tasks import rehost_episode_audio
+
+class RehostEpisodeAudioTest(TestCase):
+    def setUp(self):
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/rss"
+        )
+        self.episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode",
+            guid="12345",
+            original_audio_url="http://example.com/episode.mp3",
+            pub_date=timezone.now(),
+        )
+
+    @patch('podcasts.tasks.requests.get')
+    @patch('podcasts.tasks.genai.GenerativeModel')
+    @patch('podcasts.tasks.AudioSegment.from_file')
+    @patch('podcasts.tasks.AudioSegment.export')
+    def test_rehost_episode_audio_success(self, mock_export, mock_from_file, mock_genai_model, mock_requests_get):
+        # Mock the external services
+        mock_requests_get.return_value.status_code = 200
+        mock_requests_get.return_value.iter_content.return_value = [b'audio data']
+        mock_genai_model.return_value.generate_content.return_value.text = '[]'
+        mock_from_file.return_value.duration_seconds = 10
+
+        # Run the task
+        rehost_episode_audio(self.episode.id)
+
+        # Refresh the episode from the database
+        self.episode.refresh_from_db()
+
+        # Assert that the episode status is complete
+        self.assertEqual(self.episode.status, Episode.Status.COMPLETE)
+
+        # Assert that the rehosted_audio_url is correctly constructed
+        media = RehostedMedia.objects.get(media_guid=self.episode.rehosted_media_id)
+        expected_url = f"{settings.REHOST_BASE_URL}{reverse('serve_media_episode', kwargs={'media_guid': media.media_guid})}"
+        self.assertEqual(self.episode.rehosted_audio_url, expected_url)

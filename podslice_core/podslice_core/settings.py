@@ -132,6 +132,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR.parent / "media"
 
+# Re-host server base URL
+REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://192.168.68.83:12341")
+
 # Gemini API Key
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:

@@ -132,6 +132,7 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
             'podcast': podcast,
             'episodes': episodes,
             'build_date': datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
+            'rehost_base_url': settings.REHOST_BASE_URL,
         }
         rss_feed = render_to_string('podcasts/rss_feed_template.xml', context)
         return HttpResponse(rss_feed, content_type='application/xml')
@@ -167,7 +168,7 @@ def serve_rehosted_media(request, media_guid):
     """
     Serves a re-hosted audio file.
 
-    This view is the heart of the podslice_rehost service. Its only job
+    This view is the heart of the podslice service. Its only job
     is to look up a media GUID in its database, find the corresponding
     physical file path on disk, and stream the file back to the client.
 

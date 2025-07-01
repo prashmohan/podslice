@@ -186,6 +186,9 @@ def rehost_episode_audio(episode_id):
         logger.debug(f"Exporting processed audio to {final_audio_path}")
         processed_audio.export(final_audio_path, format="mp3")
         
+        # Get the file size
+        file_size = os.path.getsize(final_audio_path)
+
         logger.debug("Creating RehostedMedia entry in the database.")
         media_guid = uuid.uuid4()
         try:
@@ -199,10 +202,13 @@ def rehost_episode_audio(episode_id):
             logger.error(f"Failed to create RehostedMedia record for GUID {media_guid}: {e}", exc_info=True)
             raise
 
-        episode.rehosted_audio_url = reverse('serve_media_episode', kwargs={'media_guid': media_guid})
+        relative_url = reverse('serve_media_episode', kwargs={'media_guid': media_guid})
+        episode.rehosted_audio_url = f"{settings.REHOST_BASE_URL}{relative_url}"
+        episode.rehosted_audio_size = file_size
         episode.rehosted_media_id = media_guid
         episode.status = Episode.Status.COMPLETE
-        episode.save(update_fields=['status', 'rehosted_audio_url', 'rehosted_media_id'])
+        logger.info(f"REHOST_BASE_URL: {settings.REHOST_BASE_URL}")
+        episode.save(update_fields=['status', 'rehosted_audio_url', 'rehosted_audio_size', 'rehosted_media_id'])
         logger.info(f"Rehost completed successfully for Episode {episode.id}.")
 
     except requests.exceptions.RequestException as e:

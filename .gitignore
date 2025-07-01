@@ -130,5 +130,4 @@ site/ # if using mkdocs or similar
 *.tmp
 *.temp
 
-celery_broker/
 *.mp3
