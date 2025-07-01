@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 from rest_framework import status
 from django.urls import reverse
 
-from .models import Podcast, Episode
+from .models import Podcast, Episode, RehostedMedia
 from .serializers import PodcastSerializer, EpisodeSerializer
 from .tasks import poll_feed, rehost_episode_audio
 from .views import create_podcast_from_url
@@ -346,8 +346,7 @@ class PodcastTasksTest(TestCase):
     @mock.patch('podcasts.tasks.AudioSegment.from_file')
     @mock.patch('podcasts.tasks.os.makedirs')
     @mock.patch('podcasts.tasks.os.remove')
-    @mock.patch('podcasts.tasks.RehostedMedia.objects.using')
-    def test_rehost_episode_audio_success(self, mock_rehosted_media_using, mock_os_remove, mock_os_makedirs, mock_audio_segment_from_file, mock_generative_model, mock_requests_get):
+    def test_rehost_episode_audio_success(self, mock_os_remove, mock_os_makedirs, mock_audio_segment_from_file, mock_generative_model, mock_requests_get):
         mock_response = mock.Mock()
         mock_response.raise_for_status.return_value = None
         mock_response.iter_content.return_value = [b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"]
@@ -360,10 +359,6 @@ class PodcastTasksTest(TestCase):
         # Create a real AudioSegment object for testing
         real_audio_segment = AudioSegment.silent(duration=100000)
         mock_audio_segment_from_file.return_value = real_audio_segment
-
-        mock_rehosted_media_manager = mock.Mock()
-        mock_rehosted_media_using.return_value = mock_rehosted_media_manager
-        mock_rehosted_media_manager.create.return_value = mock.Mock(media_guid=uuid.uuid4())
 
         episode = Episode.objects.create(
             podcast=self.podcast,
@@ -380,9 +375,8 @@ class PodcastTasksTest(TestCase):
         self.assertEqual(episode.status, Episode.Status.COMPLETE)
         self.assertIsNotNone(episode.rehosted_audio_url)
         mock_requests_get.assert_called_once_with(episode.original_audio_url, stream=True)
-        mock_generative_model.assert_called_once_with('gemini-2.5-pro')
+        mock_generative_model.assert_called_once_with('gemini-2.5-flash')
         mock_audio_segment_from_file.assert_called_once()
-        mock_rehosted_media_manager.create.assert_called_once()
         mock_os_remove.assert_called_once()
 
     @mock.patch('podcasts.tasks.requests.get')
@@ -465,8 +459,8 @@ class PodcastTasksTest(TestCase):
     @mock.patch('podcasts.tasks.AudioSegment.from_file')
     @mock.patch('podcasts.tasks.os.makedirs')
     @mock.patch('podcasts.tasks.os.remove')
-    @mock.patch('podcasts.tasks.RehostedMedia.objects.using')
-    def test_rehost_episode_audio_rehosted_media_save_failure(self, mock_rehosted_media_using, mock_os_remove, mock_os_makedirs, mock_audio_segment_from_file, mock_generative_model, mock_requests_get):
+    @mock.patch('podcasts.tasks.RehostedMedia.objects.create')
+    def test_rehost_episode_audio_rehosted_media_save_failure(self, mock_rehosted_media_create, mock_os_remove, mock_os_makedirs, mock_audio_segment_from_file, mock_generative_model, mock_requests_get):
         mock_response = mock.Mock()
         mock_response.raise_for_status.return_value = None
         mock_response.iter_content.return_value = [b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"]
@@ -480,9 +474,7 @@ class PodcastTasksTest(TestCase):
         real_audio_segment = AudioSegment.silent(duration=100000)
         mock_audio_segment_from_file.return_value = real_audio_segment
 
-        mock_rehosted_media_manager = mock.Mock()
-        mock_rehosted_media_using.return_value = mock_rehosted_media_manager
-        mock_rehosted_media_manager.create.side_effect = Exception("DB save error")
+        mock_rehosted_media_create.side_effect = Exception("DB save error")
 
         episode = Episode.objects.create(
             podcast=self.podcast,
@@ -621,3 +613,32 @@ class PollFeedEpisodeLimitTest(TestCase):
         self.assertTrue(Episode.objects.filter(guid="guid2").exists())
         self.assertFalse(Episode.objects.filter(guid="guid3").exists())
         self.assertEqual(mock_thread.call_count, 2)
+
+class RehostedMediaViewTest(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.media_guid = uuid.uuid4()
+        self.file_path = "/tmp/test_audio.mp3"
+        self.rehosted_media = RehostedMedia.objects.create(
+            media_guid=self.media_guid,
+            file_path=self.file_path,
+            content_type="audio/mpeg"
+        )
+        with open(self.file_path, "wb") as f:
+            f.write(b"test audio data")
+
+    def tearDown(self):
+        import os
+        os.remove(self.file_path)
+
+    def test_serve_rehosted_media_success(self):
+        url = reverse('serve_media_episode', kwargs={'media_guid': self.media_guid})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response['Content-Type'], 'audio/mpeg')
+
+    def test_serve_rehosted_media_not_found(self):
+        non_existent_uuid = uuid.uuid4()
+        url = reverse('serve_media_episode', kwargs={'media_guid': non_existent_uuid})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

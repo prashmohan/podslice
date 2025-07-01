@@ -67,7 +67,7 @@ Our primary user, "Alex," is a technically savvy podcast listener. Alex is comfo
 
 ### 3.1. High-Level Architecture
 
-The architecture is composed of two primary services, a shared file store, and a background worker system. This separation ensures that the core application logic is isolated from the concerns of high-volume file delivery.
+The architecture is composed of a single monolithic Django service, a shared file store, and a background worker system. This simplifies deployment and development by keeping all components in a single project.
 ```
       User Request (RSS URL)
             |
@@ -75,13 +75,14 @@ The architecture is composed of two primary services, a shared file store, and a
 +--------------------------------------+
 |      podslice_core (Django/DRF)      |
 |       - API, Serves new Feed         |
+|       - Serves rehosted media        |
 +--------------------------------------+
 |         ^           |
 | R/W     | R         | (1) Enqueues Task
 v         |           v
 +----------------+   +-----------------------------+
 | SQLite DB      |   | Celery Filesystem Broker    |
-| (core)         |   |  (/celery_broker directory) |
+|                |   |  (/celery_broker directory) |
 +----------------+   +-----------------------------+
                                   |
                                   | (2) Worker Pulls Task
@@ -93,57 +94,46 @@ v         |           v
 | 4. Sends audio to Google Gemini API -> gets ad timestamps                |
 | 5. Uses pydub to slice audio, removes ad segments                        |
 | 6. Saves new ad-free audio to /media storage                             |
-| 7. Updates core SQLite DB with status                                    |
-| 8. Writes metadata JSON to /media/messages for podslice_rehost           |
+| 7. Updates SQLite DB with status and media metadata                      |
 +--------------------------------------------------------------------------+
-                                  |
-                                  | (9) podslice_rehost Consumer reads JSON
-                                  v
-+--------------------------------------+
-|    podslice_rehost (Django)          |
-|       - Reads from /media            |-----> User/Podcast Player
-|       - Reads from its SQLite DB     |       (requests rehosted_audio_url)
-+--------------------------------------+
+
 ```
 
 ### 3.2. Component Deep Dive
 
-* **`podslice_core` (The Brains):** This Django project is the user's sole point of interaction. It validates input, manages the state of all processing jobs, and orchestrates the background workers. It is responsible for the "thinking" but delegates the "doing."
-
-* **`podslice_rehost` (The Mouthpiece):** This is a stripped-down, highly focused Django project. Its only job is to serve files. It is deliberately kept separate to isolate file-serving traffic from the core application logic. This means the core app's performance is not affected by a large number of downloads, and the attack surface for the file server is minimized.
+* **`podslice_core` (The Monolith):** This Django project is the user's sole point of interaction. It validates input, manages the state of all processing jobs, orchestrates the background workers, and serves the final rehosted media files.
 
 * **Asynchronous Task Processing:** We use Celery with the filesystem broker. **Justification:** This is a cornerstone of the "simplicity" principle. It removes the need to install, configure, and maintain a separate service like Redis or RabbitMQ. For the expected workload of this service, the performance of the filesystem broker is more than sufficient and its operational simplicity is a major advantage.
 
-* **Data Persistence:** We use two separate SQLite databases. **Justification:** One for each service, this reinforces the decoupled nature of the architecture. It prevents the `podslice_rehost` service from having any knowledge of or dependency on the core application's data models. SQLite is chosen for its zero-configuration, serverless nature, which perfectly aligns with the project's goal of being a simple, self-contained application.
+* **Data Persistence:** We use a single SQLite database. **Justification:** This reinforces the monolithic nature of the architecture. SQLite is chosen for its zero-configuration, serverless nature, which perfectly aligns with the project's goal of being a simple, self-contained application.
 
 ### 3.3. Detailed Process Flow & Sequence Diagram
 
 This diagram illustrates the precise flow of control and data between the components.
 
 ```
-User          podslice_core API     Celery Broker        Celery Worker         Gemini API       podslice_rehost
-|                    |                    |                    |                    |                  |
-+--POST /podcasts--->|                    |                    |                    |                  |
-|                    +--Create Podcast--->|                    |                    |                  |
-|                    +--process_feed.delay()------------------->|                    |                  |
-|<--202 Accepted----+                    |                    |                    |                  |
-|                    |                    +----Pulls Task----->|                    |                  |
-|                    |                    |                    +--Fetch/Parse RSS-->|                  |
-|                    |                    |                    +-rehost_audio.delay()------------------>|                  |
-|                    |                    |                    |                    |                  |
-|                    |                    |                    +----Pulls Task----->|                  |
+User          podslice_core API     Celery Broker        Celery Worker         Gemini API
+|                    |                    |                    |                    |
++--POST /podcasts--->|                    |                    |                    |
+|                    +--Create Podcast--->|                    |                    |
+|                    +--process_feed.delay()------------------->|                    |
+|<--202 Accepted----+                    |                    |                    |
+|                    |                    +----Pulls Task----->|                    |
+|                    |                    |                    +--Fetch/Parse RSS-->|
+|                    |                    |                    +-rehost_audio.delay()------------------>|
+|                    |                    |                    |                    |
+|                    |                    |                    +----Pulls Task----->|
 |                    |                    |                    |                    +---Analyze Audio-->|
 |                    |                    |                    |                    |<----Timestamps----+
-|                    |                    |                    +--Process w/ pydub->|                    |
-|                    |                    |                    +--Write to core DB->|                    |
-|                    |                    |                    +-Write to rehost DB>|                    |
-|                    |                    |                    |                    |                  |
-+--GET /feeds/id---->|                    |                    |                    |                  |
-|<----New RSS Feed---+                    |                    |                    |                  |
-|                    |                    |                    |                    |                  |
-| (Podcast Client)   |                    |                    |                    |                  |
-+------------------------------------------------------------------------------------------------------>|
-|<------------------------------------------------------------------------------------------------------+
+|                    |                    |                    +--Process w/ pydub->|
+|                    |                    |                    +--Write to DB------>|
+|                    |                    |                    |                    |
++--GET /feeds/id---->|                    |                    |                    |
+|<----New RSS Feed---+                    |                    |                    |
+|                    |                    |                    |                    |
+| (Podcast Client)   |                    |                    |                    |
++--GET /media/id---->|                    |                    |                    |
+|<----Audio File-----+                    |                    |                    |
 ```
 ## 4. Data Models & Schemas
 
@@ -165,8 +155,6 @@ User          podslice_core API     Celery Broker        Celery Worker         G
     * `ad_segments` (JSONField, nullable): Stores the list of ad timestamps from Gemini. E.g., `[{"start": 60.5, "end": 95.0}, {"start": 1800.2, "end": 1830.0}]`.
     * `status` (CharField): The status of the individual episode job. Choices: `PENDING`, `DOWNLOADING`, `ANALYZING`, `PROCESSING`, `COMPLETED`, `FAILED`.
     * `created_at`, `updated_at` (DateTimeField).
-
-### 4.2. `podslice_rehost` Database Schema (`db.sqlite3`)
 
 * **`RehostedMedia` model:**
     * `media_guid` (UUIDField, Primary Key): The unique identifier used in the public URL.

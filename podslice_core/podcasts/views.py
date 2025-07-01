@@ -1,17 +1,18 @@
 import logging
 import feedparser
 import threading
+import os
 from django.db import transaction
 from rest_framework import generics, serializers
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views import View
 from django.urls import reverse
-from django.http import HttpResponse
+from django.http import HttpResponse, FileResponse, Http404
 from django.template.loader import render_to_string
 from django.conf import settings
 from datetime import datetime
 
-from .models import Podcast, Episode
+from .models import Podcast, Episode, RehostedMedia
 from .serializers import PodcastSerializer
 from .tasks import poll_feed, delete_podcast_data
 
@@ -131,7 +132,6 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
             'podcast': podcast,
             'episodes': episodes,
             'build_date': datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
-            'rehost_base_url': settings.REHOST_BASE_URL,
         }
         rss_feed = render_to_string('podcasts/rss_feed_template.xml', context)
         return HttpResponse(rss_feed, content_type='application/xml')
@@ -162,3 +162,48 @@ class PodcastDeleteAPIView(generics.DestroyAPIView):
         deletion_thread = threading.Thread(target=delete_podcast_data, args=(podcast_id,))
         deletion_thread.start()
         logger.info(f"Dispatched deletion task for Podcast ID: {podcast_id}")
+
+def serve_rehosted_media(request, media_guid):
+    """
+    Serves a re-hosted audio file.
+
+    This view is the heart of the podslice_rehost service. Its only job
+    is to look up a media GUID in its database, find the corresponding
+    physical file path on disk, and stream the file back to the client.
+
+    Args:
+        request: The Django HttpRequest object.
+        media_guid: The UUID of the media file to be served.
+
+    Returns:
+        A FileResponse object that streams the media file, or raises
+        an Http404 exception if the media is not found.
+    """
+    logger.info(f"Attempting to serve media for GUID: {media_guid}")
+    try:
+        media_item = RehostedMedia.objects.get(pk=media_guid)
+        logger.info(f"Found RehostedMedia record for GUID {media_guid}. File path: {media_item.file_path}")
+    except RehostedMedia.DoesNotExist:
+        logger.error(f"RehostedMedia record not found in database for GUID: {media_guid}")
+        raise Http404("Media file record not found in the database.")
+
+    # Step 2: Perform a crucial security and integrity check.
+    # Verify that the file path stored in the database actually points
+    # to a file that exists on the server's filesystem.
+    if not os.path.exists(media_item.file_path):
+         # This could happen if a file was deleted manually.
+         # Log this error in a real production system.
+         logger.error(f"Media file not found on disk for GUID {media_guid}. Path: {media_item.file_path}")
+         raise Http404("The media file is registered but was not found on disk.")
+
+    # Step 3: Use Django's FileResponse.
+    # This is the most efficient way to serve large files, as it streams
+    # the file from disk directly to the response without loading the
+    # entire file into memory. This is critical for performance and
+    # for handling large podcast episodes.
+    logger.info(f"Serving file {media_item.file_path} for GUID {media_guid}")
+    response = FileResponse(
+        open(media_item.file_path, 'rb'),
+        content_type=media_item.content_type
+    )
+    return response

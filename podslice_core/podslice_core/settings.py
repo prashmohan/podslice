@@ -43,7 +43,6 @@ INSTALLED_APPS = [
     'rest_framework',
     # Local Apps
     'podcasts', # Add this line
-    'rehost_app', # Add this line to allow access to rehost_app models
 ]
 
 MIDDLEWARE = [
@@ -84,10 +83,6 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
-    },
-    "rehost_db": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR.parent / "podslice_rehost" / "rehost.db",
     },
 }
 
@@ -133,13 +128,16 @@ STATIC_URL = "static/"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Media files
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR.parent / "media"
+
 # Gemini API Key
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
 
-# Base URL for the rehost service
-REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://localhost:8001")
+
 
       
 LOGGING = {

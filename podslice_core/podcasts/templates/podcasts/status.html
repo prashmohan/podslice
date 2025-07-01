@@ -51,9 +51,9 @@
                                 {{ episode.get_status_display }}
                             </span>
                         </p>
-                        {% if episode.rehosted_audio_url %}
+                        {% if episode.rehosted_media_id %}
                             <audio controls preload="none" class="mt-2" style="width: 100%;">
-                                <source src="{{ episode.rehosted_audio_url }}" type="audio/mpeg">
+                                <source src="{% url 'serve_media_episode' episode.rehosted_media_id %}" type="audio/mpeg">
                                 Your browser does not support the audio element.
                             </audio>
                         {% endif %}
@@ -65,7 +65,9 @@
         </div>
     </div>
 </div>
-{% endblock %}
+        </div>
+    </div>
+</div>
 
 <script>
     document.getElementById('deletePodcastBtn').addEventListener('click', function() {
@@ -92,3 +94,4 @@
         }
     });
 </script>
+{% endblock %}

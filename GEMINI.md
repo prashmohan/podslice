@@ -17,7 +17,7 @@ Podslice is a Django-based application designed to download podcast episodes, sl
 
 * **Code Quality:** Prioritize writing clean, maintainable, and well-documented code.
 * **User Experience:** All features should be designed with the end-user in mind: intuitive, fast, and accessible.
-* **Test Coverage:** Aim for a high level of test coverage. All new features must include corresponding unit and integration tests.
+*   **Test Coverage:** Aim for a high level of test coverage. All new features must include corresponding unit and integration tests. When making code changes, always update any related unit tests and automatically run the relevant unit tests to ensure they pass.
 * **Security:** Security is paramount. Follow best practices to prevent common vulnerabilities (e.g., XSS, CSRF, SQL injection).
 
 

@@ -1,5 +1,0 @@
-# Django Web Framework
-django
-
-# NOTE: Our consumer uses only built-in Python libraries (os, pathlib, json)
-# and Django's ORM, so no other dependencies are needed for now.

@@ -7,6 +7,7 @@ import uuid
 import json
 import io
 import threading
+import re
 
 import feedparser
 import requests
@@ -16,8 +17,8 @@ import google.generativeai as genai
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
 
-from .models import Episode, Podcast
-from rehost_app.models import RehostedMedia
+from django.urls import reverse
+from .models import Episode, Podcast, RehostedMedia
 
 # Define constants
 logger = logging.getLogger(__name__)
@@ -125,15 +126,15 @@ def rehost_episode_audio(episode_id):
 
         logger.debug("Sending audio to Gemini for ad detection.")
         genai.configure(api_key=settings.GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
         audio = AudioSegment.from_file(io.BytesIO(audio_content), format="mp3")
         
         prompt = f"""Analyze the provided audio and identify segments that sound like advertisements. 
                      Return a JSON array of objects, where each object has 'start' and 'end' keys 
                      representing the start and end times of the ad segment in seconds. 
-                     If no ads are found, return an empty array. 
-                     Audio duration is {audio.duration_seconds} seconds.
+                     If no ads are found, return an empty array. Only generate the JSON array and 
+                     nothing other than the array. Audio duration is {audio.duration_seconds} seconds.
                      Example: [{{"start": 60.5, "end": 95.0}}]"""
 
         response = model.generate_content(prompt)
@@ -144,7 +145,18 @@ def rehost_episode_audio(episode_id):
         logger.info(f"Gemini analysis complete for Episode {episode.id}. Ad segments: {ad_segments}")
 
         logger.debug("Slicing audio to remove ad segments.")
-        ad_segments_list = json.loads(episode.ad_segments) if episode.ad_segments else []
+        ad_segments_list = []
+        if episode.ad_segments:
+            # Use regex to extract the JSON array from the Gemini response
+            match = re.search(r'```json\n(\[.*?\])\n```', episode.ad_segments, re.DOTALL)
+            if match:
+                json_string = match.group(1)
+                try:
+                    ad_segments_list = json.loads(json_string)
+                except json.JSONDecodeError:
+                    logger.warning(f"Gemini API returned invalid JSON for ad segments for Episode {episode.id}. Proceeding with no ad segments.")
+            else:
+                logger.warning(f"No JSON array found in Gemini response for Episode {episode.id}. Proceeding with no ad segments.")
         ad_segments_list.sort(key=lambda x: x['start'])
 
         processed_audio = AudioSegment.empty()
@@ -174,14 +186,20 @@ def rehost_episode_audio(episode_id):
         logger.debug(f"Exporting processed audio to {final_audio_path}")
         processed_audio.export(final_audio_path, format="mp3")
         
-        logger.debug("Creating RehostedMedia entry in rehost_db.")
+        logger.debug("Creating RehostedMedia entry in the database.")
         media_guid = uuid.uuid4()
-        RehostedMedia.objects.using('rehost_db').create(
-            media_guid=media_guid,
-            file_path=final_audio_path,
-            content_type=output_mime_type,
-        )
-        episode.rehosted_audio_url = f"{settings.REHOST_BASE_URL}/audio/{media_guid}/"
+        try:
+            RehostedMedia.objects.create(
+                media_guid=media_guid,
+                file_path=final_audio_path,
+                content_type=output_mime_type,
+            )
+            logger.info(f"Successfully created RehostedMedia record for GUID: {media_guid}")
+        except Exception as e:
+            logger.error(f"Failed to create RehostedMedia record for GUID {media_guid}: {e}", exc_info=True)
+            raise
+
+        episode.rehosted_audio_url = reverse('serve_media_episode', kwargs={'media_guid': media_guid})
         episode.rehosted_media_id = media_guid
         episode.status = Episode.Status.COMPLETE
         episode.save(update_fields=['status', 'rehosted_audio_url', 'rehosted_media_id'])
@@ -199,6 +217,7 @@ def rehost_episode_audio(episode_id):
         if temp_audio_path and os.path.exists(temp_audio_path):
             logger.debug(f"Cleaning up temporary file: {temp_audio_path}")
             os.remove(temp_audio_path)
+        logger.info(f"Finished rehost task for Episode ID: {episode_id}")
 
 def delete_podcast_data(podcast_id):
     """
@@ -213,7 +232,7 @@ def delete_podcast_data(podcast_id):
         for episode in podcast.episodes.all():
             if episode.rehosted_media_id:
                 try:
-                    rehosted_media = RehostedMedia.objects.using('rehost_db').get(media_guid=episode.rehosted_media_id)
+                    rehosted_media = RehostedMedia.objects.get(media_guid=episode.rehosted_media_id)
                     # Delete physical file
                     if os.path.exists(rehosted_media.file_path):
                         os.remove(rehosted_media.file_path)
