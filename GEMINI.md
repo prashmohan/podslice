@@ -63,6 +63,16 @@ For `podslice_core`:
 python podslice_core/manage.py migrate
 ```
 
+### Running Tests
+
+To run the tests for the `podcasts` app, run the following command:
+
+```bash
+python podslice_core/manage.py test podcasts
+```
+
+
+
 
 
 ## Code Style and Conventions

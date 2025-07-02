@@ -224,6 +224,18 @@ def poll_feed(podcast_id: uuid.UUID):
         logger.error(f"Podcast with ID {podcast_id} not found. Aborting task.")
         return
 
+    podcast.last_polled = timezone.now()
+    podcast.save(update_fields=['last_polled'])
+
+    # Reset the status of any episodes that are not complete
+    stuck_episodes = podcast.episodes.exclude(status=Episode.Status.COMPLETE)
+    for episode in stuck_episodes:
+        episode.status = Episode.Status.NEW
+        episode.save(update_fields=['status'])
+        logger.info(f"Reset status for episode '{episode.title}' to NEW.")
+        rehost_thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
+        rehost_thread.start()
+
     try:
         logger.debug(f"Fetching RSS feed from {podcast.rss_url}")
         feed = feedparser.parse(podcast.rss_url, agent=BROWSER_USER_AGENT)
@@ -236,11 +248,11 @@ def poll_feed(podcast_id: uuid.UUID):
 
     new_episodes_count = 0
     skipped_episodes_count = 0
-    # Limit processing to the latest 2 episodes to avoid overwhelming the system
+    # Limit processing to the latest 10 episodes to avoid overwhelming the system
     # on the first poll of a large feed.
-    logger.info(f"Processing the latest {2} episodes from '{podcast.title}'.")
+    logger.info(f"Processing the latest {10} episodes from '{podcast.title}'.")
 
-    for entry in feed.entries[:2]:
+    for entry in feed.entries[:10]:
         guid = entry.get("id")
         if not guid:
             logger.warning(f"Skipping entry in '{podcast.title}' due to missing GUID. Title: '{entry.get('title', 'N/A')}'")

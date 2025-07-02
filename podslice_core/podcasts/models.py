@@ -9,6 +9,7 @@ class Podcast(models.Model):
     slug = models.SlugField(max_length=255, unique=True, help_text="URL-friendly slug, generated from title.")
     rss_url = models.URLField(unique=True, help_text="The unique URL of the podcast's RSS feed.")
     artwork_url = models.URLField(blank=True, null=True)
+    last_polled = models.DateTimeField(null=True, blank=True)
     # Note: Other metadata fields can be added here later if needed.
 
     def save(self, *args, **kwargs):

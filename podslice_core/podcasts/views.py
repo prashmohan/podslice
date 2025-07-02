@@ -94,6 +94,14 @@ class PodcastStatusUIView(View):
         episodes = podcast.episodes.all().order_by('-pub_date')
         return render(request, 'podcasts/status.html', {'podcast': podcast, 'episodes': episodes})
 
+class PodcastRefreshView(View):
+    def post(self, request, podcast_id):
+        podcast = get_object_or_404(Podcast, id=podcast_id)
+        poll_thread = threading.Thread(target=poll_feed, args=(podcast.id,))
+        poll_thread.start()
+        return redirect(reverse('podcast-status-ui', kwargs={'podcast_id': podcast.id}))
+
+
 class PodcastSubscriptionAPIView(generics.ListCreateAPIView):
     """
     API view to list existing podcast subscriptions and create new ones.

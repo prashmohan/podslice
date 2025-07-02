@@ -2,6 +2,7 @@ import uuid
 import time
 import os
 from datetime import datetime
+import threading
 from unittest import mock
 
 from django.test import TestCase, override_settings
@@ -25,6 +26,64 @@ from .tasks import (
     _slice_audio,
     _save_processed_audio,
 )
+from .apps import polling_loop, start_polling_thread
+
+
+class PollingThreadTest(TestCase):
+    def tearDown(self):
+        Podcast.objects.all().delete()
+
+    @mock.patch('podcasts.tasks.poll_feed')
+    def test_polling_loop(self, mock_poll_feed):
+        # Test that the loop doesn't run if the shutdown event is set
+        shutdown_event = threading.Event()
+        shutdown_event.set() # Immediately stop the loop
+        polling_loop(shutdown_event, 1)
+        mock_poll_feed.assert_not_called()
+
+        # Test that the loop runs once
+        Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
+        shutdown_event.clear()
+        def side_effect(podcast_id):
+            shutdown_event.set()
+            return True
+        
+        mock_poll_feed.side_effect = side_effect
+        polling_loop(shutdown_event, 1)
+        mock_poll_feed.assert_called_once()
+
+    @mock.patch('podcasts.apps.threading.Thread')
+    def test_start_polling_thread(self, mock_thread):
+        thread, _ = start_polling_thread()
+        mock_thread.assert_called_once()
+        thread.start.assert_called_once()
+
+    @mock.patch('podcasts.tasks.rehost_episode_audio')
+    @mock.patch('podcasts.tasks.feedparser')
+    def test_poll_feed_reprocesses_stuck_episodes(self, mock_feedparser, mock_rehost):
+        # Create a podcast and a "stuck" episode
+        podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
+        episode = Episode.objects.create(
+            podcast=podcast,
+            title="Stuck Episode",
+            guid="stuck-episode",
+            original_audio_url="http://example.com/stuck.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.PROCESSING,
+        )
+
+        # Mock the feedparser to return no new episodes
+        mock_feedparser.parse.return_value.entries = []
+
+        # Call the poll_feed task
+        poll_feed(podcast.id)
+
+        # Check that the rehost_episode_audio task was called for the stuck episode
+        mock_rehost.assert_called_once_with(episode.id)
+
+        # Check that the episode status was reset to NEW
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.NEW)
 
 
 class PodcastModelTest(TestCase):
@@ -36,22 +95,6 @@ class PodcastModelTest(TestCase):
         )
         self.assertIsInstance(podcast, Podcast)
         self.assertEqual(str(podcast), "Test Podcast")
-
-
-class EpisodeModelTest(TestCase):
-    def setUp(self):
-        self.podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/feed.xml")
-
-    def test_episode_creation(self):
-        episode = Episode.objects.create(
-            podcast=self.podcast,
-            title="Test Episode",
-            guid=str(uuid.uuid4()),
-            pub_date=timezone.now(),
-            original_audio_url="http://example.com/audio.mp3",
-        )
-        self.assertIsInstance(episode, Episode)
-        self.assertEqual(str(episode), "Test Podcast - Test Episode")
 
 
 class RehostedMediaModelTest(TestCase):

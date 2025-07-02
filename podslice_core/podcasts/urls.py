@@ -6,6 +6,7 @@ from .views import (
     PodcastSubscribeUIView,
     PodcastStatusUIView,
     PodcastDeleteAPIView,
+    PodcastRefreshView,
     serve_rehosted_media
 )
 
@@ -16,5 +17,6 @@ urlpatterns = [
     path('api/podcasts/<uuid:podcast_id>/', PodcastDeleteAPIView.as_view(), name='podcast-delete-api'),
     path('', PodcastSubscribeUIView.as_view(), name='podcast-subscribe-ui'),
     path('status/<uuid:podcast_id>/', PodcastStatusUIView.as_view(), name='podcast-status-ui'),
+    path('status/<uuid:podcast_id>/refresh/', PodcastRefreshView.as_view(), name='podcast-refresh'),
     path('media/episodes/<uuid:media_guid>/', serve_rehosted_media, name='serve_media_episode'),
 ]
