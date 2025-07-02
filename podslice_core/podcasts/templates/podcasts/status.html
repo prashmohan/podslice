@@ -23,7 +23,7 @@
                         <p><strong>Overall Status:</strong> <span class="badge bg-info">{{ podcast.get_status_display }}</span></p>
                         <p><strong>Generated RSS:</strong> 
                             <a href="{% url 'podcast-rss-feed-api' podcast.id %}" target="_blank">
-                                {% url 'podcast-rss-feed-api' podcast.id %}
+                                {{ request.scheme }}://{{ request.get_host }}{% url 'podcast-rss-feed-api' podcast.id %}
                             </a>
                         </p>
                     </div>
