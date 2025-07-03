@@ -23,7 +23,7 @@ from .models import Episode, Podcast, RehostedMedia
 # Define constants
 logger = logging.getLogger(__name__)
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 def _update_episode_status(episode: Episode, status: Episode.Status, save: bool = True):
@@ -63,13 +63,35 @@ def _get_ad_segments_from_gemini(audio_content: bytes, audio_duration_seconds: f
     try:
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel(GEMINI_MODEL)
-        
-        prompt = f"""Analyze the provided audio and identify segments that sound like advertisements. 
-                     Return a JSON array of objects, where each object has 'start' and 'end' keys 
-                     representing the start and end times of the ad segment in seconds. 
-                     If no ads are found, return an empty array. Only generate the JSON array and 
-                     nothing other than the array. Audio duration is {audio_duration_seconds} seconds.
-                     Example: [{{"start": 60.5, "end": 95.0}}]"""
+
+        prompt = f"""
+You are an audio editing assistant. Your sole task is to analyze a podcast audio file and identify all segments that are **not** the main content. The goal is to create a list of timestamps for segments that can be removed.
+
+Identify the precise start and end times for any of the following non-essential audio segments:
+
+* **Advertisements** (pre-produced ads, host-read sponsor messages)
+* **Introduction Music/Jingles**
+* **Outro Music/Jingles**
+* **Host Banter** that is clearly separate from the main topic (e.g., initial greetings, off-topic chat before the core discussion begins).
+* **Calls to Action** (e.g., "subscribe," "follow us on social media," "visit our website").
+* **Extended periods of silence** (longer than 3 seconds).
+
+**Instructions:**
+
+1.  Focus exclusively on identifying the segments listed above.
+2.  Do **not** identify or timestamp the main content of the podcast.
+3.  Return a JSON array of objects, where each object has 'start' and 'end' keys representing the start and end times of the ad segment in seconds.
+4.  If no ads are found, return an empty array.
+5.  Only generate the JSON array and nothing other than the array.
+6.  Audio duration is {audio_duration_seconds} seconds.
+
+Example: [{{"start": 60.5, "end": 95.0}}]"""
+        # prompt = f"""Analyze the provided audio and identify segments that sound like advertisements.
+        #              Return a JSON array of objects, where each object has 'start' and 'end' keys
+        #              representing the start and end times of the ad segment in seconds.
+        #              If no ads are found, return an empty array. Only generate the JSON array and
+        #              nothing other than the array. Audio duration is {audio_duration_seconds} seconds.
+        #              Example: [{{"start": 60.5, "end": 95.0}}]"""
 
         response = model.generate_content(prompt)
         return response.text
@@ -210,6 +232,51 @@ def rehost_episode_audio(episode_id: uuid.UUID):
             logger.debug(f"Cleaning up temporary file: {temp_audio_path}")
             os.remove(temp_audio_path)
         logger.info(f"Finished rehost task for Episode ID: {episode.id}")
+
+
+def reprocess_podcast(podcast_id: uuid.UUID):
+    """
+    Clears all downloaded/processed data for a podcast's episodes and
+    triggers a re-processing of each episode.
+    """
+    logger.info(f"Starting reprocessing task for Podcast ID: {podcast_id}")
+    try:
+        podcast = Podcast.objects.get(id=podcast_id)
+    except Podcast.DoesNotExist:
+        logger.error(f"Podcast with ID {podcast_id} not found. Aborting reprocess task.")
+        return
+
+    for episode in podcast.episodes.all():
+        logger.info(f"Resetting episode '{episode.title}' for reprocessing.")
+        
+        # Delete associated media file if it exists
+        if episode.rehosted_media_id:
+            try:
+                media_item = RehostedMedia.objects.get(pk=episode.rehosted_media_id)
+                if os.path.exists(media_item.file_path):
+                    os.remove(media_item.file_path)
+                    logger.debug(f"Deleted physical file: {media_item.file_path}")
+                media_item.delete()
+                logger.debug(f"Deleted RehostedMedia entry for GUID: {media_item.media_guid}")
+            except RehostedMedia.DoesNotExist:
+                logger.warning(f"RehostedMedia record not found for media ID: {episode.rehosted_media_id}")
+            except Exception as e:
+                logger.error(f"Error deleting media for episode {episode.id}: {e}", exc_info=True)
+
+        # Reset episode fields
+        episode.status = Episode.Status.NEW
+        episode.rehosted_media_id = None
+        episode.rehosted_audio_url = None
+        episode.rehosted_audio_size = None
+        episode.ad_segments = None
+        episode.save()
+
+        # Trigger re-hosting task
+        rehost_thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
+        rehost_thread.start()
+        logger.info(f"Dispatched re-hosting task for episode '{episode.title}'.")
+
+    logger.info(f"Completed dispatching reprocessing tasks for all episodes of podcast '{podcast.title}'.")
 
 
 def poll_feed(podcast_id: uuid.UUID):

@@ -14,7 +14,7 @@ from datetime import datetime
 
 from .models import Podcast, Episode, RehostedMedia
 from .serializers import PodcastSerializer
-from .tasks import poll_feed, delete_podcast_data
+from .tasks import poll_feed, delete_podcast_data, reprocess_podcast
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,14 @@ class PodcastRefreshView(View):
         podcast = get_object_or_404(Podcast, id=podcast_id)
         poll_thread = threading.Thread(target=poll_feed, args=(podcast.id,))
         poll_thread.start()
+        return redirect(reverse('podcast-status-ui', kwargs={'podcast_id': podcast.id}))
+
+
+class PodcastReprocessView(View):
+    def post(self, request, podcast_id):
+        podcast = get_object_or_404(Podcast, id=podcast_id)
+        reprocess_thread = threading.Thread(target=reprocess_podcast, args=(podcast.id,))
+        reprocess_thread.start()
         return redirect(reverse('podcast-status-ui', kwargs={'podcast_id': podcast.id}))
 
 

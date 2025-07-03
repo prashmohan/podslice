@@ -26,6 +26,10 @@
                             {% csrf_token %}
                             <button type="submit" class="btn btn-sm btn-primary">Refresh Now</button>
                         </form>
+                        <form action="{% url 'podcast-reprocess' podcast.id %}" method="post" class="d-inline ms-2">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-warning">Clear Downloads & Reprocess</button>
+                        </form>
                     </div>
                 </div>
             </div>
