@@ -20,6 +20,7 @@
                     {% endif %}
                     <div>
                         <p><strong>RSS URL:</strong> <a href="{{ podcast.rss_url }}" target="_blank">{{ podcast.rss_url }}</a></p>
+                        <p><strong>Rehosted RSS Feed:</strong> <a href="{% url 'podcast-rss-feed-api' podcast.id %}" target="_blank">{% url 'podcast-rss-feed-api' podcast.id %}</a></p>
                         <p><strong>Overall Status:</strong> <span class="badge bg-info">{{ podcast.get_status_display }}</span></p>
                         <p><strong>Last Polled:</strong> {{ podcast.last_polled|date:"Y-m-d H:i:s"|default:"Never" }}</p>
                         <form action="{% url 'podcast-refresh' podcast.id %}" method="post" class="d-inline">
