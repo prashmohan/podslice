@@ -315,11 +315,11 @@ def poll_feed(podcast_id: uuid.UUID):
 
     new_episodes_count = 0
     skipped_episodes_count = 0
-    # Limit processing to the latest 10 episodes to avoid overwhelming the system
+    # Limit processing to the latest 5 episodes to avoid overwhelming the system
     # on the first poll of a large feed.
-    logger.info(f"Processing the latest {10} episodes from '{podcast.title}'.")
+    logger.info(f"Processing the latest {5} episodes from '{podcast.title}'.")
 
-    for entry in feed.entries[:10]:
+    for entry in feed.entries[:5]:
         guid = entry.get("id")
         if not guid:
             logger.warning(f"Skipping entry in '{podcast.title}' due to missing GUID. Title: '{entry.get('title', 'N/A')}'")
@@ -358,6 +358,27 @@ def poll_feed(podcast_id: uuid.UUID):
             logger.error(f"Failed to create episode with GUID {guid} for podcast '{podcast.title}'. Error: {e}", exc_info=True)
 
     logger.info(f"Polling complete for '{podcast.title}'. Found {new_episodes_count} new episodes. Skipped {skipped_episodes_count} existing episodes.")
+
+    # Enforce episode limit
+    all_episodes = podcast.episodes.all().order_by('-pub_date')
+    if all_episodes.count() > 5:
+        episodes_to_delete = all_episodes[5:]
+        logger.info(f"Enforcing episode limit. Deleting {len(episodes_to_delete)} old episodes for '{podcast.title}'.")
+        for episode in episodes_to_delete:
+            if episode.rehosted_media_id:
+                try:
+                    media_item = RehostedMedia.objects.get(pk=episode.rehosted_media_id)
+                    if os.path.exists(media_item.file_path):
+                        os.remove(media_item.file_path)
+                        logger.debug(f"Deleted physical file: {media_item.file_path}")
+                    media_item.delete()
+                    logger.debug(f"Deleted RehostedMedia entry for GUID: {media_item.media_guid}")
+                except RehostedMedia.DoesNotExist:
+                    logger.warning(f"RehostedMedia record not found for media ID: {episode.rehosted_media_id}")
+                except Exception as e:
+                    logger.error(f"Error deleting media for episode {episode.id}: {e}", exc_info=True)
+            episode.delete()
+            logger.info(f"Deleted old episode: '{episode.title}'")
 
 
 def delete_podcast_data(podcast_id: uuid.UUID):
