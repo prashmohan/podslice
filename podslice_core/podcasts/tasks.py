@@ -267,7 +267,7 @@ def reprocess_podcast(podcast_id: uuid.UUID):
         episode.status = Episode.Status.NEW
         episode.rehosted_media_id = None
         episode.rehosted_audio_url = None
-        episode.rehosted_audio_size = None
+        episode.rehosted_audio_size = 0
         episode.ad_segments = None
         episode.save()
 
