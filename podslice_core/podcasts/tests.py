@@ -1,36 +1,29 @@
-import uuid
-import time
 import os
-from datetime import datetime
 import threading
+import time
+import uuid
+from datetime import datetime
 from unittest import mock
 
-from django.test import TestCase, override_settings
-from django.utils import timezone
-from django.urls import reverse
-from django.conf import settings
-from rest_framework.test import APIClient
-from rest_framework import status
-from pydub import AudioSegment
 import requests
+from django.conf import settings
+from django.test import TestCase, override_settings
+from django.urls import reverse
+from django.utils import timezone
+from pydub import AudioSegment
+from rest_framework import status
+from rest_framework.test import APIClient
 
-from .models import Podcast, Episode, RehostedMedia
-from .serializers import PodcastSerializer
-from .tasks import (
-    poll_feed,
-    rehost_episode_audio,
-    delete_podcast_data,
-    _download_audio,
-    _get_ad_segments_from_gemini,
-    _parse_ad_segments,
-    _slice_audio,
-    _save_processed_audio,
-)
 from .apps import polling_loop, start_polling_thread
-
+from .models import Episode, Podcast, RehostedMedia
+from .serializers import PodcastSerializer
+from .tasks import (_download_audio, _get_ad_segments_from_gemini,
+                    _parse_ad_segments, _save_processed_audio, _slice_audio,
+                    delete_podcast_data, poll_feed, rehost_episode_audio)
 
 class PollingThreadTest(TestCase):
     def tearDown(self):
+
         Podcast.objects.all().delete()
 
     @mock.patch('podcasts.tasks.poll_feed')
@@ -58,28 +51,37 @@ class PollingThreadTest(TestCase):
         mock_thread.assert_called_once()
         thread.start.assert_called_once()
 
-    @mock.patch('podcasts.tasks.rehost_episode_audio')
+    @mock.patch('podcasts.tasks.DOWNLOAD_POOL.submit')
     @mock.patch('podcasts.tasks.feedparser')
-    def test_poll_feed_reprocesses_stuck_episodes(self, mock_feedparser, mock_rehost):
+    def test_poll_feed_reprocesses_stuck_episodes(self, mock_feedparser, mock_submit):
         # Create a podcast and a "stuck" episode
         podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
+        stuck_time = timezone.now() - timezone.timedelta(hours=2)
+        
         episode = Episode.objects.create(
             podcast=podcast,
             title="Stuck Episode",
             guid="stuck-episode",
             original_audio_url="http://example.com/stuck.mp3",
-            pub_date=timezone.now(),
-            status=Episode.Status.PROCESSING,
+            pub_date=stuck_time,
+            status=Episode.Status.NEW,
         )
+        # Manually set the updated_at to the past to simulate a stuck episode
+        episode.updated_at = stuck_time
+        episode.save()
 
-        # Mock the feedparser to return no new episodes
-        mock_feedparser.parse.return_value.entries = []
+
+        # Mock the feedparser to return a valid, empty feed
+        mock_feed = mock.Mock()
+        mock_feed.bozo = False
+        mock_feed.entries = []
+        mock_feedparser.parse.return_value = mock_feed
 
         # Call the poll_feed task
         poll_feed(podcast.id)
 
         # Check that the rehost_episode_audio task was called for the stuck episode
-        mock_rehost.assert_called_once_with(episode.id)
+        mock_submit.assert_called_once_with(rehost_episode_audio, episode.id)
 
         # Check that the episode status was reset to NEW
         episode.refresh_from_db()
@@ -168,22 +170,19 @@ class TasksHelperFunctionsTest(TestCase):
     def test_download_audio_success(self, mock_requests_get):
         mock_response = mock.Mock()
         mock_response.raise_for_status.return_value = None
-        mock_response.iter_content.return_value = [b"audio_data"]
+        mock_response.content = b"audio_data"
         mock_requests_get.return_value = mock_response
 
-        audio_content, temp_path = _download_audio(self.episode)
+        audio_content = _download_audio(self.episode)
 
         self.assertEqual(audio_content, b"audio_data")
-        self.assertTrue(os.path.exists(temp_path))
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.DOWNLOADING)
-        os.remove(temp_path)
 
     @mock.patch('podcasts.tasks.requests.get', side_effect=requests.exceptions.RequestException("Download failed"))
     def test_download_audio_failure(self, mock_requests_get):
-        audio_content, temp_path = _download_audio(self.episode)
+        audio_content = _download_audio(self.episode)
         self.assertIsNone(audio_content)
-        self.assertIsNone(temp_path)
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.FAILED)
 
@@ -197,31 +196,33 @@ class TasksHelperFunctionsTest(TestCase):
         self.assertEqual(response, '[{"start": 10, "end": 20}]')
 
     def test_parse_ad_segments_valid_json(self):
-        segments = _parse_ad_segments('[{"start": 10, "end": 20}]', self.episode.id)
+        segments = _parse_ad_segments('[{"start": 10, "end": 20}]', self.episode)
         self.assertEqual(segments, [{"start": 10, "end": 20}])
 
     def test_parse_ad_segments_valid_json_with_markdown(self):
-        response = "```json\n[{\"start\": 30.5, \"end\": 45.0}]\n```"
-        segments = _parse_ad_segments(response, self.episode.id)
+        response = """```json
+[{"start": 30.5, "end": 45.0}]
+```"""
+        segments = _parse_ad_segments(response, self.episode)
         self.assertEqual(segments, [{"start": 30.5, "end": 45.0}])
 
     def test_parse_ad_segments_invalid_json(self):
-        segments = _parse_ad_segments('invalid json', self.episode.id)
+        segments = _parse_ad_segments('invalid json', self.episode)
         self.assertEqual(segments, [])
 
     def test_parse_ad_segments_empty_response(self):
-        segments = _parse_ad_segments('', self.episode.id)
+        segments = _parse_ad_segments('', self.episode)
         self.assertEqual(segments, [])
 
     def test_slice_audio_with_ads(self):
         audio = AudioSegment.silent(duration=60000)  # 60 seconds
         ad_segments = [{"start": 10, "end": 20}, {"start": 40, "end": 50}]
-        processed_audio = _slice_audio(audio, ad_segments)
+        processed_audio = _slice_audio(audio, ad_segments, self.episode)
         self.assertEqual(len(processed_audio), 40000) # 60s - 10s - 10s = 40s
 
     def test_slice_audio_no_ads(self):
         audio = AudioSegment.silent(duration=60000)
-        processed_audio = _slice_audio(audio, [])
+        processed_audio = _slice_audio(audio, [], self.episode)
         self.assertEqual(len(processed_audio), 60000)
 
     @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
@@ -269,13 +270,11 @@ class RehostEpisodeAudioOrchestratorTest(TestCase):
     @mock.patch('podcasts.tasks._slice_audio')
     @mock.patch('podcasts.tasks.os.path.getsize', return_value=12345)
     @mock.patch('podcasts.tasks.RehostedMedia.objects.create')
-    @mock.patch('podcasts.tasks.os.remove')
     @mock.patch('pydub.AudioSegment.export')
     def test_rehost_episode_audio_orchestrator_success(
-        self, mock_export, mock_os_remove, mock_rehosted_media_create, mock_getsize, mock_slice, mock_parse, mock_gemini, mock_from_file, mock_download
+        self, mock_export, mock_rehosted_media_create, mock_getsize, mock_slice, mock_parse, mock_gemini, mock_from_file, mock_download
     ):
-        temp_audio_path = "/tmp/test.mp3"
-        mock_download.return_value = (b"audio_data", temp_audio_path)
+        mock_download.return_value = b"audio_data"
         mock_from_file.return_value = AudioSegment.silent(duration=60000)
         mock_gemini.return_value = '[{"start": 10, "end": 20}]'
         mock_parse.return_value = [{"start": 10, "end": 20}]
@@ -289,14 +288,6 @@ class RehostEpisodeAudioOrchestratorTest(TestCase):
         mock_parse.assert_called_once()
         mock_slice.assert_called_once()
         mock_export.assert_called_once()
-        
-        # HACK: Explicitly call os.remove and assert it was called twice
-        # This is to ensure the finally block is being executed in the test
-        with open(temp_audio_path, "w") as f:
-            f.write("test")
-        os.remove(temp_audio_path)
-        mock_os_remove.assert_called_with(temp_audio_path)
-
 
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.COMPLETE)

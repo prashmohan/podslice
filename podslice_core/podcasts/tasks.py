@@ -9,6 +9,7 @@ import io
 import threading
 import re
 from typing import List, Dict, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
 
 import feedparser
 import requests
@@ -24,6 +25,7 @@ from .models import Episode, Podcast, RehostedMedia
 logger = logging.getLogger(__name__)
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 GEMINI_MODEL = "gemini-2.5-flash"
+DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=1)
 
 
 def _update_episode_status(episode: Episode, status: Episode.Status, save: bool = True):
@@ -31,30 +33,23 @@ def _update_episode_status(episode: Episode, status: Episode.Status, save: bool 
     episode.status = status
     if save:
         episode.save(update_fields=['status'])
-    logger.info(f"Episode {episode.id} status updated to {status.label}.")
+    logger.info(f"Episode '{episode.title}' ({episode.id}) status updated to {status.label}.")
 
 
-def _download_audio(episode: Episode) -> Tuple[Optional[bytes], Optional[str]]:
-    """Downloads audio content and returns it along with a temporary file path."""
+def _download_audio(episode: Episode) -> Optional[bytes]:
+    """Downloads audio content and returns it as bytes."""
     _update_episode_status(episode, Episode.Status.DOWNLOADING)
     try:
-        logger.debug(f"Downloading audio from {episode.original_audio_url}")
-        response = requests.get(episode.original_audio_url, stream=True)
+        logger.info(f"Downloading audio for '{episode.title}' from {episode.original_audio_url}")
+        response = requests.get(episode.original_audio_url)
         response.raise_for_status()
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
-            audio_content = b""
-            for chunk in response.iter_content(chunk_size=8192):
-                temp_audio_file.write(chunk)
-                audio_content += chunk
-            temp_audio_path = temp_audio_file.name
-        
-        logger.info(f"Audio for Episode {episode.id} downloaded to {temp_audio_path}")
-        return audio_content, temp_audio_path
+        audio_content = response.content
+        logger.info(f"Audio for Episode '{episode.title}' ({episode.id}) downloaded successfully.")
+        return audio_content
     except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to download audio for Episode {episode.id}: {e}", exc_info=True)
+        logger.error(f"Failed to download audio for Episode '{episode.title}' ({episode.id}): {e}", exc_info=True)
         _update_episode_status(episode, Episode.Status.FAILED)
-        return None, None
+        return None
 
 
 def _get_ad_segments_from_gemini(audio_content: bytes, audio_duration_seconds: float) -> str:
@@ -100,13 +95,13 @@ Example: [{{"start": 60.5, "end": 95.0}}]"""
         return "[]" # Return empty list on failure to avoid breaking the pipeline
 
 
-def _parse_ad_segments(gemini_response: str, episode_id: uuid.UUID) -> List[Dict[str, float]]:
+def _parse_ad_segments(gemini_response: str, episode: Episode) -> List[Dict[str, float]]:
     """Parses the JSON response from Gemini to get ad segments."""
-    logger.debug(f"Parsing Gemini response for Episode {episode_id}: {gemini_response}")
+    logger.debug(f"Parsing Gemini response for Episode '{episode.title}' ({episode.id}): {gemini_response}")
     # Use regex to find the JSON array within ```json ... ``` blocks or just the array itself
     match = re.search(r'```json\n(\[.*?\])\n```|(\[.*?\])', gemini_response, re.DOTALL)
     if not match:
-        logger.warning(f"No valid JSON array found in Gemini response for Episode {episode_id}.")
+        logger.warning(f"No valid JSON array found in Gemini response for Episode '{episode.title}' ({episode.id}).")
         return []
 
     json_string = next(g for g in match.groups() if g is not None)
@@ -122,16 +117,16 @@ def _parse_ad_segments(gemini_response: str, episode_id: uuid.UUID) -> List[Dict
         ad_segments_list.sort(key=lambda x: x['start'])
         return ad_segments_list
     except json.JSONDecodeError:
-        logger.warning(f"Gemini API returned invalid JSON for ad segments for Episode {episode.id}. Response: {json_string}")
+        logger.warning(f"Gemini API returned invalid JSON for ad segments for Episode '{episode.title}' ({episode.id}). Response: {json_string}")
         return []
 
 
-def _slice_audio(audio: AudioSegment, ad_segments: List[Dict[str, float]]) -> AudioSegment:
+def _slice_audio(audio: AudioSegment, ad_segments: List[Dict[str, float]], episode: Episode) -> AudioSegment:
     """Removes ad segments from the audio."""
     if not ad_segments:
         return audio
 
-    logger.debug(f"Slicing audio to remove {len(ad_segments)} ad segments.")
+    logger.debug(f"Slicing audio for '{episode.title}' to remove {len(ad_segments)} ad segments.")
     processed_audio = AudioSegment.empty()
     last_segment_end = 0
 
@@ -141,7 +136,7 @@ def _slice_audio(audio: AudioSegment, ad_segments: List[Dict[str, float]]) -> Au
         
         # Ensure segments are valid and ordered
         if start_ms < last_segment_end:
-            logger.warning(f"Skipping overlapping or out-of-order ad segment: {segment}")
+            logger.warning(f"Skipping overlapping or out-of-order ad segment in '{episode.title}': {segment}")
             continue
 
         if start_ms > last_segment_end:
@@ -166,7 +161,7 @@ def _save_processed_audio(episode: Episode, processed_audio: AudioSegment):
     final_audio_filename = f"{uuid.uuid4()}{output_suffix}"
     final_audio_path = os.path.join(media_dir, final_audio_filename)
 
-    logger.debug(f"Exporting processed audio to {final_audio_path}")
+    logger.debug(f"Exporting processed audio for '{episode.title}' to {final_audio_path}")
     processed_audio.export(final_audio_path, format="mp3")
     
     file_size = os.path.getsize(final_audio_path)
@@ -178,9 +173,9 @@ def _save_processed_audio(episode: Episode, processed_audio: AudioSegment):
             file_path=final_audio_path,
             content_type=output_mime_type,
         )
-        logger.info(f"Successfully created RehostedMedia record for GUID: {media_entry.media_guid}")
+        logger.info(f"Successfully created RehostedMedia record for '{episode.title}' (GUID: {media_entry.media_guid})")
     except Exception as e:
-        logger.error(f"Failed to create RehostedMedia record: {e}", exc_info=True)
+        logger.error(f"Failed to create RehostedMedia record for '{episode.title}': {e}", exc_info=True)
         os.remove(final_audio_path) # Clean up orphaned file
         raise
 
@@ -190,7 +185,7 @@ def _save_processed_audio(episode: Episode, processed_audio: AudioSegment):
     episode.rehosted_media_id = media_entry.media_guid
     _update_episode_status(episode, Episode.Status.COMPLETE, save=False)
     episode.save(update_fields=['status', 'rehosted_audio_url', 'rehosted_audio_size', 'rehosted_media_id'])
-    logger.info(f"Rehost completed successfully for Episode {episode.id}.")
+    logger.info(f"Rehost completed successfully for Episode '{episode.title}' ({episode.id}).")
 
 
 def rehost_episode_audio(episode_id: uuid.UUID):
@@ -198,16 +193,15 @@ def rehost_episode_audio(episode_id: uuid.UUID):
     Downloads, processes, and re-hosts an episode's audio.
     This is the main orchestrator for the re-hosting pipeline.
     """
-    logger.info(f"Starting rehost task for Episode ID: {episode_id}")
     try:
-        episode = Episode.objects.get(id=episode_id)
+        episode = Episode.objects.select_related('podcast').get(id=episode_id)
+        logger.info(f"Starting rehost task for '{episode.title}' from podcast '{episode.podcast.title}'.")
     except Episode.DoesNotExist:
         logger.error(f"Episode with ID {episode_id} not found. Aborting rehost task.")
         return
 
-    temp_audio_path = None
     try:
-        audio_content, temp_audio_path = _download_audio(episode)
+        audio_content = _download_audio(episode)
         if not audio_content:
             return # Download failed, status already updated
 
@@ -218,20 +212,17 @@ def rehost_episode_audio(episode_id: uuid.UUID):
         episode.ad_segments = gemini_response
         _update_episode_status(episode, Episode.Status.PROCESSING, save=False)
         episode.save(update_fields=['status', 'ad_segments'])
-        logger.info(f"Gemini analysis complete for Episode {episode.id}. Ad segments: {gemini_response}")
+        logger.info(f"Gemini analysis complete for Episode '{episode.title}'. Ad segments: {gemini_response}")
 
-        ad_segments_list = _parse_ad_segments(gemini_response, episode.id)
-        processed_audio = _slice_audio(audio, ad_segments_list)
+        ad_segments_list = _parse_ad_segments(gemini_response, episode)
+        processed_audio = _slice_audio(audio, ad_segments_list, episode)
         _save_processed_audio(episode, processed_audio)
 
     except Exception as e:
-        logger.error(f"An unexpected error occurred during rehosting of Episode {episode.id}: {e}", exc_info=True)
+        logger.error(f"An unexpected error occurred during rehosting of Episode '{episode.title}' ({episode.id}): {e}", exc_info=True)
         _update_episode_status(episode, Episode.Status.FAILED)
     finally:
-        if temp_audio_path and os.path.exists(temp_audio_path):
-            logger.debug(f"Cleaning up temporary file: {temp_audio_path}")
-            os.remove(temp_audio_path)
-        logger.info(f"Finished rehost task for Episode ID: {episode.id}")
+        logger.info(f"Finished rehost task for Episode '{episode.title}' ({episode.id}).")
 
 
 def reprocess_podcast(podcast_id: uuid.UUID):
@@ -239,9 +230,9 @@ def reprocess_podcast(podcast_id: uuid.UUID):
     Clears all downloaded/processed data for a podcast's episodes and
     triggers a re-processing of each episode.
     """
-    logger.info(f"Starting reprocessing task for Podcast ID: {podcast_id}")
     try:
         podcast = Podcast.objects.get(id=podcast_id)
+        logger.info(f"Starting reprocessing task for Podcast '{podcast.title}' ({podcast_id}).")
     except Podcast.DoesNotExist:
         logger.error(f"Podcast with ID {podcast_id} not found. Aborting reprocess task.")
         return
@@ -255,13 +246,13 @@ def reprocess_podcast(podcast_id: uuid.UUID):
                 media_item = RehostedMedia.objects.get(pk=episode.rehosted_media_id)
                 if os.path.exists(media_item.file_path):
                     os.remove(media_item.file_path)
-                    logger.debug(f"Deleted physical file: {media_item.file_path}")
+                    logger.debug(f"Deleted physical file for '{episode.title}': {media_item.file_path}")
                 media_item.delete()
-                logger.debug(f"Deleted RehostedMedia entry for GUID: {media_item.media_guid}")
+                logger.debug(f"Deleted RehostedMedia entry for '{episode.title}' (GUID: {media_item.media_guid})")
             except RehostedMedia.DoesNotExist:
-                logger.warning(f"RehostedMedia record not found for media ID: {episode.rehosted_media_id}")
+                logger.warning(f"RehostedMedia record not found for '{episode.title}' (media ID: {episode.rehosted_media_id})")
             except Exception as e:
-                logger.error(f"Error deleting media for episode {episode.id}: {e}", exc_info=True)
+                logger.error(f"Error deleting media for episode '{episode.title}': {e}", exc_info=True)
 
         # Reset episode fields
         episode.status = Episode.Status.NEW
@@ -272,8 +263,7 @@ def reprocess_podcast(podcast_id: uuid.UUID):
         episode.save()
 
         # Trigger re-hosting task
-        rehost_thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
-        rehost_thread.start()
+        DOWNLOAD_POOL.submit(rehost_episode_audio, episode.id)
         logger.info(f"Dispatched re-hosting task for episode '{episode.title}'.")
 
     logger.info(f"Completed dispatching reprocessing tasks for all episodes of podcast '{podcast.title}'.")
@@ -294,14 +284,34 @@ def poll_feed(podcast_id: uuid.UUID):
     podcast.last_polled = timezone.now()
     podcast.save(update_fields=['last_polled'])
 
-    # Reset the status of any episodes that are not complete
-    stuck_episodes = podcast.episodes.exclude(status=Episode.Status.COMPLETE)
+    # Find episodes that are new or have failed, and queue them for processing.
+    episodes_to_process = set(
+        podcast.episodes.filter(status__in=[Episode.Status.NEW, Episode.Status.FAILED])
+        .values_list('id', flat=True)
+    )
+
+    # Reset the status of failed episodes to NEW so they can be re-processed.
+    if episodes_to_process:
+        failed_episodes_count = podcast.episodes.filter(
+            id__in=episodes_to_process, status=Episode.Status.FAILED
+        ).update(status=Episode.Status.NEW)
+
+        if failed_episodes_count > 0:
+            logger.info(f"Reset status to NEW for {failed_episodes_count} failed episodes.")
+        
+        logger.info(f"Found {len(episodes_to_process)} existing episodes to process.")
+
+    # Also, find episodes that have been stuck in a processing state for a long time
+    stuck_threshold = timezone.now() - timezone.timedelta(hours=1)
+    stuck_episodes = podcast.episodes.filter(
+        status__in=[Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING],
+        updated_at__lt=stuck_threshold
+    )
     for episode in stuck_episodes:
+        logger.warning(f"Episode '{episode.title}' is stuck. Resetting to NEW for reprocessing.")
         episode.status = Episode.Status.NEW
         episode.save(update_fields=['status'])
-        logger.info(f"Reset status for episode '{episode.title}' to NEW.")
-        rehost_thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
-        rehost_thread.start()
+        episodes_to_process.add(episode.id)
 
     try:
         logger.debug(f"Fetching RSS feed from {podcast.rss_url}")
@@ -349,13 +359,16 @@ def poll_feed(podcast_id: uuid.UUID):
             )
             if created:
                 new_episodes_count += 1
-                logger.info(f"New episode created: '{episode.title}' for podcast '{podcast.title}'. Dispatching rehost task.")
-                rehost_thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
-                rehost_thread.start()
+                logger.info(f"New episode created: '{episode.title}' for podcast '{podcast.title}'.")
+                episodes_to_process.add(episode.id)
             else:
                 skipped_episodes_count += 1
         except Exception as e:
             logger.error(f"Failed to create episode with GUID {guid} for podcast '{podcast.title}'. Error: {e}", exc_info=True)
+
+    for episode_id in episodes_to_process:
+        logger.info(f"Dispatching re-hosting task for episode ID '{episode_id}'.")
+        DOWNLOAD_POOL.submit(rehost_episode_audio, episode_id)
 
     logger.info(f"Polling complete for '{podcast.title}'. Found {new_episodes_count} new episodes. Skipped {skipped_episodes_count} existing episodes.")
 
@@ -411,7 +424,7 @@ def delete_podcast_data(podcast_id: uuid.UUID):
         # Finally, delete the podcast object, which will cascade-delete its episodes
         podcast_title = podcast.title
         podcast.delete()
-        logger.info(f"Successfully deleted podcast '{podcast_title}' ({podcast_id}) and all its episodes.")
+        logger.info(f"Successfully deleted podcast '{podcast_title}' ({podcast_id}) and all its associated data.")
 
     except Podcast.DoesNotExist:
         logger.error(f"Podcast with ID {podcast_id} not found. Aborting deletion task.")
