@@ -239,6 +239,7 @@ def _run_ffmpeg_slicing(audio_path: str, select_filter: str, episode: Episode) -
         'ffmpeg', '-i', audio_path, '-vf', select_filter, '-vn',
         '-c:a', 'libmp3lame', '-q:a', '2', final_audio_path
     ]
+    logger.info(f"Executing ffmpeg command for '{episode.title}': {' '.join(ffmpeg_cmd)}")
     try:
         subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
         file_size = os.path.getsize(final_audio_path)
@@ -279,7 +280,7 @@ def _slice_and_save_audio(audio_path: str, ad_segments: List[Dict[str, float]], 
         logger.info("Did not get any ad segment slices for '{episode.title}'")
         _save_empty_audio_as_rehosted(episode)
     else:
-        logger.info("Using the following ad segment slices for '{episode.title}': {select_filter}")
+        logger.info(f"Using the following ad segment slices for '{episode.title}': {select_filter}")
         final_audio_path, file_size = _run_ffmpeg_slicing(audio_path, select_filter, episode)
         _save_processed_audio(episode, final_audio_path, file_size)
 
