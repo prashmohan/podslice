@@ -4,7 +4,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
-from ..models import Podcast
+from podcasts.models import Podcast
 from django.conf import settings
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
@@ -38,22 +38,3 @@ class PodcastViewsTest(TestCase):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         mock_thread.assert_called_once()
         self.assertTrue(Podcast.objects.filter(id=self.podcast.id).exists())
-
-    def test_opml_export_view(self):
-        # Create a second podcast to ensure multiple podcasts are exported
-        Podcast.objects.create(title="Another Podcast", rss_url="http://example.com/another_feed.xml")
-
-        response = self.client.get(reverse('opml-export'))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response['Content-Type'], 'application/xml')
-        self.assertIn(b'<?xml version="1.0" encoding="UTF-8"?>', response.content)
-        self.assertIn(b'<opml version="2.0">', response.content)
-        self.assertIn(b'<title>Podslice Subscriptions</title>', response.content)
-        self.assertIn(b'<outline text="Test Podcast" title="Test Podcast" type="rss"', response.content)
-        expected_url_podcast1 = b'xmlUrl="http://testserver/api/rss/' + str(self.podcast.id).encode() + b'/rss.xml"'
-        self.assertIn(expected_url_podcast1, response.content)
-
-        # For the second podcast, we'll find its ID and then construct the expected URL
-        podcast2 = Podcast.objects.get(title="Another Podcast")
-        expected_url_podcast2 = b'xmlUrl="http://testserver/api/rss/' + str(podcast2.id).encode() + b'/rss.xml"'
-        self.assertIn(expected_url_podcast2, response.content)

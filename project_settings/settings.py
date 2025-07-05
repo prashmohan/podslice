@@ -57,7 +57,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "podslice_core.urls"
+ROOT_URLCONF = "project_settings.urls"
 
 TEMPLATES = [
     {
@@ -75,7 +75,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "podslice_core.wsgi.application"
+WSGI_APPLICATION = "project_settings.wsgi.application"
 
 
 # Database
@@ -84,7 +84,7 @@ WSGI_APPLICATION = "podslice_core.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": BASE_DIR / "project_settings" / "db.sqlite3",
     },
 }
 
@@ -132,7 +132,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Media files
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR.parent / "media"
+MEDIA_ROOT = BASE_DIR / "media"
 
 # Re-host server base URL
 REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://192.168.68.83:12341")

@@ -2,9 +2,9 @@ import threading
 from unittest import mock
 from django.test import TestCase, override_settings
 from django.utils import timezone
-from ..apps import polling_loop, start_polling_thread
-from ..models import Episode, Podcast
-from ..tasks import poll_feed, rehost_episode_audio
+from podcasts.apps import polling_loop, start_polling_thread
+from podcasts.models import Episode, Podcast
+from podcasts.tasks import poll_feed, rehost_episode_audio
 import os
 from django.conf import settings
 
@@ -76,7 +76,7 @@ class RaceConditionPreventionTest(TestCase):
         )
 
     def tearDown(self):
-        from ..tasks import polling_locks
+        from podcasts.tasks import polling_locks
         polling_locks.clear()
 
     @mock.patch('podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio', return_value=None)

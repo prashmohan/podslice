@@ -5,8 +5,8 @@ import requests
 from django.conf import settings
 from django.test import TestCase, override_settings
 from django.utils import timezone
-from ..models import Episode, Podcast, RehostedMedia
-from ..tasks import AdManager, EpisodeProcessor, FeedManager, rehost_episode_audio, delete_podcast_data
+from podcasts.models import Episode, Podcast, RehostedMedia
+from podcasts.tasks import AdManager, EpisodeProcessor, FeedManager, rehost_episode_audio, delete_podcast_data
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
 class TasksClassMethodsTest(TestCase):

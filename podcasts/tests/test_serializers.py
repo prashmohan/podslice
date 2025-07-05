@@ -1,6 +1,6 @@
 from django.test import TestCase
-from ..models import Podcast
-from ..serializers import PodcastSerializer
+from podcasts.models import Podcast
+from podcasts.serializers import PodcastSerializer
 
 class PodcastSerializerTest(TestCase):
     def test_podcast_serializer_valid_data(self):

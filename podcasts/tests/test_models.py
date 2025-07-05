@@ -1,5 +1,5 @@
 from django.test import TestCase
-from ..models import Podcast, RehostedMedia
+from podcasts.models import Podcast, RehostedMedia
 
 class PodcastModelTest(TestCase):
     def test_podcast_creation(self):

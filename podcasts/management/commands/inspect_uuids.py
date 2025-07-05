@@ -26,6 +26,6 @@ class Command(BaseCommand):
             for podcast in invalid_podcasts:
                 self.stdout.write(f"  - Title: {podcast['title']}, Invalid ID: {podcast['id']}")
             self.stdout.write(self.style.NOTICE("\nTo fix this, you will need to manually inspect the database and either delete these rows or assign them valid UUIDs."))
-            self.stdout.write(self.style.NOTICE("You can use 'python podslice_core/manage.py dbshell' to access the database directly."))
+            self.stdout.write(self.style.NOTICE("You can use 'python manage.py dbshell' to access the database directly."))
         else:
             self.stdout.write(self.style.SUCCESS("No invalid UUIDs found in the Podcast table."))
