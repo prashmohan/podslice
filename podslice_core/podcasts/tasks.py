@@ -215,29 +215,46 @@ def _analyze_audio_with_gemini(episode: Episode, audio_path: str, audio_duration
 # Audio Slicing and Saving (FFMPEG)
 # =============================================================================
 
-def _generate_ffmpeg_select_filter(ad_segments: List[Dict[str, float]], audio_duration_seconds: float) -> str:
-    """Generates the ffmpeg select filter string to remove ad segments."""
-    select_filter_parts = []
+def _generate_ffmpeg_filter_complex(ad_segments: List[Dict[str, float]], audio_duration_seconds: float) -> str:
+    """Generates the ffmpeg filter_complex string to remove ad segments."""
+    content_segments = []
     last_segment_end = 0
     for segment in ad_segments:
         start_s = segment['start']
         end_s = segment['end']
         if start_s > last_segment_end:
-            select_filter_parts.append(f"between(t,{last_segment_end},{start_s})")
+            content_segments.append({'start': last_segment_end, 'end': start_s})
         last_segment_end = max(last_segment_end, end_s)
     if last_segment_end < audio_duration_seconds:
-        select_filter_parts.append(f"between(t,{last_segment_end},{audio_duration_seconds})")
-    if not select_filter_parts:
+        content_segments.append({'start': last_segment_end, 'end': audio_duration_seconds})
+
+    if not content_segments:
         return ""
-    return "select='" + "+".join(select_filter_parts) + "',asetpts=N/SR/TB"
+
+    filter_parts = []
+    stream_labels = []
+    for i, segment in enumerate(content_segments):
+        start = segment['start']
+        end = segment['end']
+        label = f"[a{i}]"
+        filter_parts.append(f"[0:a]atrim={start}:{end},asetpts=PTS-STARTPTS{label}")
+        stream_labels.append(label)
+
+    concat_streams = "".join(stream_labels)
+    concat_filter = f"{concat_streams}concat=n={len(stream_labels)}:v=0:a=1[out]"
+    
+    return "; ".join(filter_parts) + "; " + concat_filter
 
 
-def _run_ffmpeg_slicing(audio_path: str, select_filter: str, episode: Episode) -> Tuple[str, int]:
+def _run_ffmpeg_slicing(audio_path: str, filter_complex: str, episode: Episode) -> Tuple[str, int]:
     """Runs ffmpeg to slice the audio and returns the output path and size."""
     final_audio_path = _create_rehosted_media_path()
     ffmpeg_cmd = [
-        'ffmpeg', '-i', audio_path, '-vf', select_filter, '-vn',
-        '-c:a', 'libmp3lame', '-q:a', '2', final_audio_path
+        'ffmpeg', '-i', audio_path,
+        '-filter_complex', filter_complex,
+        '-map', '[out]',
+        '-c:a', 'libmp3lame', '-q:a', '2',
+        final_audio_path
     ]
     logger.info(f"Executing ffmpeg command for '{episode.title}': {' '.join(ffmpeg_cmd)}")
     try:
@@ -274,14 +291,14 @@ def _slice_and_save_audio(audio_path: str, ad_segments: List[Dict[str, float]], 
         return
 
     logger.debug(f"Slicing audio for '{episode.title}' to remove {len(ad_segments)} ad segments.")
-    select_filter = _generate_ffmpeg_select_filter(ad_segments, audio_duration_seconds)
+    filter_complex = _generate_ffmpeg_filter_complex(ad_segments, audio_duration_seconds)
     
-    if not select_filter:
+    if not filter_complex:
         logger.info("Did not get any ad segment slices for '{episode.title}'")
         _save_empty_audio_as_rehosted(episode)
     else:
-        logger.info(f"Using the following ad segment slices for '{episode.title}': {select_filter}")
-        final_audio_path, file_size = _run_ffmpeg_slicing(audio_path, select_filter, episode)
+        logger.info(f"Using the following ad segment slices for '{episode.title}': {filter_complex}")
+        final_audio_path, file_size = _run_ffmpeg_slicing(audio_path, filter_complex, episode)
         _save_processed_audio(episode, final_audio_path, file_size)
 
 

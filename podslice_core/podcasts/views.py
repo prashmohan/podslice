@@ -2,6 +2,7 @@ import logging
 import feedparser
 import threading
 import os
+import json
 from django.db import transaction
 from rest_framework import generics, serializers
 from django.shortcuts import render, redirect, get_object_or_404
@@ -10,7 +11,7 @@ from django.urls import reverse
 from django.http import HttpResponse, FileResponse, Http404
 from django.template.loader import render_to_string
 from django.conf import settings
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .models import Podcast, Episode, RehostedMedia
 from .serializers import PodcastSerializer
@@ -92,6 +93,32 @@ class PodcastStatusUIView(View):
     def get(self, request, podcast_id):
         podcast = get_object_or_404(Podcast, id=podcast_id)
         episodes = podcast.episodes.all().order_by('-pub_date')
+
+        for episode in episodes:
+            episode.removed_duration_str = "N/A"
+            if episode.ad_segments:
+                try:
+                    # The ad_segments can be a string from Gemini that needs to be cleaned
+                    # or a direct JSON string stored in the model.
+                    # This logic attempts to handle both cases.
+                    cleaned_json = episode.ad_segments
+                    if '```json' in cleaned_json:
+                        cleaned_json = cleaned_json.split('```json\n')[1].split('\n```')[0]
+                    
+                    ad_segments_list = json.loads(cleaned_json)
+                    
+                    total_removed_seconds = sum(seg.get('end', 0) - seg.get('start', 0) for seg in ad_segments_list)
+                    
+                    if total_removed_seconds > 0:
+                        duration = timedelta(seconds=total_removed_seconds)
+                        total_minutes, remainder_seconds = divmod(int(duration.total_seconds()), 60)
+                        episode.removed_duration_str = f"{total_minutes}m {remainder_seconds}s"
+                    else:
+                        episode.removed_duration_str = "0s"
+                except (json.JSONDecodeError, TypeError, KeyError, IndexError) as e:
+                    logger.warning(f"Could not parse ad_segments for episode {episode.id}. Error: {e}")
+                    episode.removed_duration_str = "Error"
+
         return render(request, 'podcasts/status.html', {'podcast': podcast, 'episodes': episodes})
 
 class PodcastRefreshView(View):

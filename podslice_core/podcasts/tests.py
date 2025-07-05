@@ -285,7 +285,7 @@ class TasksHelperFunctionsTest(TestCase):
         mock_save_original.assert_called_once_with("/fake/path.mp3", self.episode)
 
     @mock.patch('podcasts.tasks._save_empty_audio_as_rehosted')
-    @mock.patch('podcasts.tasks._generate_ffmpeg_select_filter', return_value="")
+    @mock.patch('podcasts.tasks._generate_ffmpeg_filter_complex', return_value="")
     def test_slice_and_save_audio_empty_filter(self, mock_filter, mock_save_empty):
         ad_segments = [{"start": 0, "end": 60}]
         _slice_and_save_audio("/fake/path.mp3", ad_segments, self.episode, 60.0)

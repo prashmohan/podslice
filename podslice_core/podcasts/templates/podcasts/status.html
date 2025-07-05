@@ -56,6 +56,12 @@
                                 {{ episode.get_status_display }}
                             </span>
                         </p>
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                <a href="{{ episode.original_audio_url }}" target="_blank">Original Audio</a>
+                                | Removed: {{ episode.removed_duration_str }}
+                            </small>
+                        </div>
                         {% if episode.rehosted_media_id %}
                             <audio controls preload="none" class="mt-2" style="width: 100%;">
                                 <source src="{% url 'serve_media_episode' episode.rehosted_media_id %}" type="audio/mpeg">
