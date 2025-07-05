@@ -286,11 +286,19 @@ def _slice_and_save_audio(audio_path: str, ad_segments: List[Dict[str, float]], 
 # Main Episode Rehosting Orchestration
 # =============================================================================
 
+polling_locks = {}
+
 def rehost_episode_audio(episode_id: uuid.UUID):
     """Downloads, processes, and re-hosts an episode's audio."""
     audio_path = None
     try:
         episode = Episode.objects.select_related('podcast').get(id=episode_id)
+        
+        # Check if the episode is already being processed
+        if episode.status in [Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING]:
+            logger.warning(f"Skipping rehost task for '{episode.title}' because it is already in progress (status: {episode.get_status_display()}).")
+            return
+            
         logger.info(f"Starting rehost task for '{episode.title}' from podcast '{episode.podcast.title}'.")
     except Episode.DoesNotExist:
         logger.error(f"Episode with ID {episode_id} not found. Aborting rehost task.")
@@ -466,19 +474,31 @@ def _dispatch_rehosting_tasks(episode_ids: set):
 
 def poll_feed(podcast_id: uuid.UUID):
     """Fetches and parses a podcast's RSS feed to find and save new episodes."""
-    logger.info(f"Starting poll for Podcast ID: {podcast_id}")
-    podcast = _get_podcast_for_polling(podcast_id)
-    if not podcast:
+    lock = polling_locks.get(podcast_id)
+    if lock is None:
+        lock = threading.Lock()
+        polling_locks[podcast_id] = lock
+
+    if not lock.acquire(blocking=False):
+        logger.warning(f"Polling for podcast {podcast_id} is already in progress. Skipping.")
         return
 
-    episodes_to_process = _get_episodes_to_process(podcast)
-    feed = _fetch_and_parse_feed(podcast)
-    if not feed:
-        return
-    
-    _process_feed_entries(feed, podcast, episodes_to_process)
-    _dispatch_rehosting_tasks(episodes_to_process)
-    _enforce_episode_limit(podcast)
+    try:
+        logger.info(f"Starting poll for Podcast ID: {podcast_id}")
+        podcast = _get_podcast_for_polling(podcast_id)
+        if not podcast:
+            return
+
+        episodes_to_process = _get_episodes_to_process(podcast)
+        feed = _fetch_and_parse_feed(podcast)
+        if not feed:
+            return
+        
+        _process_feed_entries(feed, podcast, episodes_to_process)
+        _dispatch_rehosting_tasks(episodes_to_process)
+        _enforce_episode_limit(podcast)
+    finally:
+        lock.release()
 
 
 # =============================================================================

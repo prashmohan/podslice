@@ -382,6 +382,52 @@ class RehostEpisodeAudioTest(TestCase):
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
+class RaceConditionPreventionTest(TestCase):
+    def setUp(self):
+        self.podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
+        self.episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode",
+            guid="12345",
+            original_audio_url="http://example.com/episode.mp3",
+            pub_date=timezone.now(),
+        )
+        self.test_media_dir = settings.MEDIA_ROOT
+        os.makedirs(self.test_media_dir, exist_ok=True)
+
+    def tearDown(self):
+        if os.path.exists(self.test_media_dir):
+            for f in os.listdir(self.test_media_dir):
+                os.remove(os.path.join(self.test_media_dir, f))
+            os.rmdir(self.test_media_dir)
+        # Clear the polling locks after each test
+        from .tasks import polling_locks
+        polling_locks.clear()
+
+    @mock.patch('podcasts.tasks._fetch_and_prepare_audio', return_value=None)
+    def test_rehost_episode_audio_skips_if_in_progress(self, mock_fetch):
+        # Set the episode status to an in-progress state
+        self.episode.status = Episode.Status.DOWNLOADING
+        self.episode.save()
+
+        rehost_episode_audio(self.episode.id)
+
+        # Assert that the processing pipeline was not started
+        mock_fetch.assert_not_called()
+
+    @mock.patch('podcasts.tasks._get_podcast_for_polling')
+    def test_poll_feed_locking(self, mock_get_podcast):
+        # Mock the lock to be acquired
+        lock = mock.Mock()
+        lock.acquire.return_value = False
+        
+        with mock.patch('podcasts.tasks.polling_locks', {self.podcast.id: lock}):
+            poll_feed(self.podcast.id)
+            # Assert that the polling logic was not executed
+            mock_get_podcast.assert_not_called()
+
+
+@override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
 class DeletePodcastDataTest(TestCase):
     def setUp(self):
         self.podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
