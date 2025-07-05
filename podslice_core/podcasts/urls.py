@@ -8,7 +8,8 @@ from .views import (
     PodcastDeleteAPIView,
     PodcastRefreshView,
     PodcastReprocessView,
-    serve_rehosted_media
+    serve_rehosted_media,
+    OPML_ExportView
 )
 
 urlpatterns = [
@@ -21,5 +22,6 @@ urlpatterns = [
     path('status/<uuid:podcast_id>/refresh/', PodcastRefreshView.as_view(), name='podcast-refresh'),
     path('status/<uuid:podcast_id>/reprocess/', PodcastReprocessView.as_view(), name='podcast-reprocess'),
     path('media/episodes/<uuid:media_guid>/', serve_rehosted_media, name='serve_media_episode'),
+    path('opml/export/', OPML_ExportView.as_view(), name='opml-export'),
 ]
 

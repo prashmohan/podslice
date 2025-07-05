@@ -17,6 +17,27 @@ from .models import Podcast, Episode, RehostedMedia
 from .serializers import PodcastSerializer
 from .tasks import poll_feed, delete_podcast_data, reprocess_podcast
 
+
+class OPML_ExportView(View):
+    def get(self, request):
+        podcasts = Podcast.objects.all()
+        for podcast in podcasts:
+            podcast.rehosted_rss_url = request.build_absolute_uri(
+                reverse('podcast-rss-feed-api', args=[podcast.id])
+            )
+
+        context = {
+            'podcasts': podcasts,
+            'created_at': datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
+        }
+        
+        opml_content = render_to_string('podcasts/opml_export.xml', context)
+        
+        response = HttpResponse(opml_content, content_type='application/xml')
+        response['Content-Disposition'] = 'attachment; filename="podslice_subscriptions.opml"'
+        return response
+
+
 logger = logging.getLogger(__name__)
 
 BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"

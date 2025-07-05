@@ -28,8 +28,9 @@
         </div>
 
         <div class="card shadow-sm">
-            <div class="card-header">
+            <div class="card-header d-flex justify-content-between align-items-center">
                 <h3 class="card-title mb-0">Current Subscriptions</h3>
+                <a href="{% url 'opml-export' %}" class="btn btn-sm btn-outline-primary">Export OPML</a>
             </div>
             <div class="list-group list-group-flush">
                 {% for podcast in podcasts %}
