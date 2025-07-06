@@ -1,2 +1,7 @@
 [MASTER]
 load-plugins=pylint_django
+django-settings-module=podslice.settings
+init-hook='import sys; sys.path.append(".")'
+
+[FORMAT]
+max-line-length=120

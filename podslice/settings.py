@@ -65,7 +65,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "project_settings.urls"
+ROOT_URLCONF = "podslice.urls"
 
 TEMPLATES = [
     {
@@ -83,7 +83,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "project_settings.wsgi.application"
+WSGI_APPLICATION = "podslice.wsgi.application"
 
 
 # Database
@@ -92,7 +92,7 @@ WSGI_APPLICATION = "project_settings.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "project_settings" / "db.sqlite3",
+        "NAME": BASE_DIR / "podslice" / "db.sqlite3",
     },
 }
 

@@ -51,4 +51,3 @@ urlpatterns = [
             OPMLImportView.as_view(),
             name='opml-import'),
 ]
-

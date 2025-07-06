@@ -12,4 +12,4 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """Handles the command."""
-        Run(["--load-plugins=pylint_django", "podcasts", "project_settings"])
+        Run(["--load-plugins=pylint_django", "--django-settings-module=podslice.settings", "podcasts", "podslice"])
