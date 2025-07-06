@@ -10,7 +10,9 @@ class Podcast(models.Model):
     rss_url = models.URLField(unique=True, help_text="The unique URL of the podcast's RSS feed.")
     artwork_url = models.URLField(blank=True, null=True)
     last_polled = models.DateTimeField(null=True, blank=True)
-    # Note: Other metadata fields can be added here later if needed.
+
+    class Meta:
+        ordering = ["title"]
 
     def save(self, *args, **kwargs):
         # Automatically generate the slug from the title if it doesn't exist.
@@ -43,6 +45,9 @@ class Episode(models.Model):
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.NEW)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-pub_date"]
     
     def __str__(self):
         return f"{self.podcast.title} - {self.title}"
@@ -110,6 +115,9 @@ class RehostedPodcast(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        ordering = ["title"]
+
     def __str__(self):
         return self.title
 
@@ -162,6 +170,7 @@ class RehostedEpisode(models.Model):
 
     class Meta:
         unique_together = ('podcast', 'guid',) # Ensure GUIDs are unique per podcast
+        ordering = ["-pub_date_iso"]
 
     def __str__(self):
         return f"{self.podcast.title} - {self.title}"
