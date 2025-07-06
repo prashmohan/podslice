@@ -13,7 +13,8 @@ from podcasts.views import (
     PodcastReprocessView,
     serve_rehosted_media,
     OPMLExportView,
-    OPMLImportView
+    OPMLImportView,
+    EpisodeStatusAPIView
 )
 
 urlpatterns = [
@@ -29,6 +30,9 @@ urlpatterns = [
     path('api/podcasts/<uuid:podcast_id>/',
          PodcastDeleteAPIView.as_view(),
          name='podcast-delete-api'),
+    path('api/episodes/status/',
+         EpisodeStatusAPIView.as_view(),
+         name='episode-status-api'),
     path('',
          PodcastSubscribeUIView.as_view(),
          name='podcast-subscribe-ui'),
