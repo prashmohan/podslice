@@ -35,7 +35,7 @@ if not SECRET_KEY:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["192.168.68.83", "localhost", "127.0.0.1"]
+ALLOWED_HOSTS = ["*"]
 
 DOWNLOAD_WORKER_COUNT = 1
 
