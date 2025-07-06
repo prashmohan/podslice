@@ -1,7 +1,7 @@
 # Podslice: Engineering Design Document
 
 **Author:** Prashanth Mohan
-**Date:** June 17, 2025
+**Date:** July 6, 2025
 
 ---
 
@@ -18,47 +18,45 @@ The vision for Podslice is to be a simple, fire-and-forget service that transfor
 The primary goals are:
 * **Ad-Free Experience:** To programmatically identify and remove advertisement segments from podcast episodes.
 * **Content Persistence:** To re-host audio content, providing the user with a durable link that they control.
-* **Simplicity:** To provide a straightforward API-driven workflow with no complex user interface or account management.
+* **Simplicity:** To provide a straightforward web interface and API-driven workflow.
 * **Reliability:** To build a robust, fault-tolerant system that can handle long-running processes and recover from transient errors.
 
 ### 1.3. Non-Goals
 
 To maintain focus and simplicity, this project will explicitly **not** include:
 * User accounts or authentication.
-* A graphical user interface (GUI). This is an API-first service.
 * Monetization features or subscription management.
 * Direct audio streaming; the service provides a new RSS feed for use in standard podcast clients.
 * Support for video podcasts.
 
 ### 1.4. Guiding Principles
 
-* **Simplicity Over Complexity:** We will always prefer simpler, self-contained solutions over those that introduce external dependencies unless absolutely necessary. The choice of SQLite and a filesystem message broker are direct results of this principle.
-* **Decoupled Architecture:** Services should be independent and communicate via well-defined interfaces.
-* **Asynchronous Processing:** The system must remain responsive. Any long-running operation (>500ms) must be offloaded to a background process.
+* **Simplicity Over Complexity:** We will always prefer simpler, self-contained solutions over those that introduce external dependencies unless absolutely necessary.
+* **Monolithic Architecture:** All components are part of a single Django project to simplify development and deployment.
+* **Asynchronous Processing:** Any long-running operation (>500ms) must be offloaded to a background process to keep the application responsive.
 * **Idempotency and Fault Tolerance:** Tasks should be designed to be safely retried without creating duplicate data or unintended side effects.
 
 ---
 
 ## 2. User Journeys & Requirements
 
-### 2.1. Persona: The Technical Podcast Enthusiast
+### 2.1. Persona: The Podcast Enthusiast
 
-Our primary user, "Alex," is a technically savvy podcast listener. Alex is comfortable with APIs, wants to archive their favorite shows, and finds ad interruptions disruptive to their listening flow. They value control and permanence over their media.
+Our primary user, "Alex," is a podcast listener who wants to archive their favorite shows and finds ad interruptions disruptive to their listening flow. They value control and permanence over their media.
 
 ### 2.2. The "Happy Path" Journey
 
-1.  **Submission:** Alex finds the RSS feed for a podcast they love. Using a simple cURL command or a script, they make a `POST` request to the Podslice API (`/api/podcasts/`), providing the feed URL. The API immediately responds with a `202 Accepted` status and a unique ID for the new podcast job.
-2.  **Processing (In Background):** The Podslice service begins its work. It fetches the feed, identifies all episodes, and queues a processing job for each one.
-3.  **Polling for Status:** While the jobs are running, Alex can periodically make a `GET` request to the status endpoint (`/api/podcasts/<id>/status/`). The response shows the overall progress and the status of each individual episode (`PENDING`, `DOWNLOADING`, `COMPLETED`, `FAILED`).
-4.  **Completion:** After some time (depending on the number and length of episodes), the status endpoint shows that all episodes are `COMPLETED`.
-5.  **Subscription:** Alex takes the new feed URL provided by the service (`/feeds/podcasts/<id>/rss.xml`) and adds it to their favorite podcast client (e.g., Overcast, Pocket Casts).
-6.  **Listening:** The podcast appears in their client. When they play an episode, they enjoy an uninterrupted, ad-free experience, served seamlessly from the Podslice re-hosting service.
+1.  **Subscription:** Alex visits the Podslice web interface, enters the RSS feed URL for a podcast they love, and clicks "Subscribe".
+2.  **Processing (In Background):** The Podslice service begins its work. It fetches the feed, identifies all episodes, and queues a processing job for each one in a background thread.
+3.  **Viewing Status:** Alex is redirected to a status page where they can see the progress of the podcast's episodes. The page shows the status of each individual episode (`NEW`, `QUEUED`, `DOWNLOADING`, `ANALYZING`, `PROCESSING`, `COMPLETE`, `FAILED`).
+4.  **Completion:** After some time (depending on the number and length of episodes), the status page shows that all episodes are `COMPLETE`.
+5.  **Listening:** Alex can then use the new, re-hosted RSS feed in their favorite podcast client. When they play an episode, they enjoy an uninterrupted, ad-free experience, served seamlessly from the Podslice service.
 
 ### 2.3. Error & Edge Case Journeys
 
-* **Invalid URL Submission:** Alex accidentally provides a malformed URL or a URL that doesn't point to a valid RSS feed. The API should immediately reject the request with a `400 Bad Request` error and a clear message.
+* **Invalid URL Submission:** Alex accidentally provides a malformed URL or a URL that doesn't point to a valid RSS feed. The web interface should show an error message.
 * **Episode Download Failure:** An episode's audio file is missing from the original server (404 error). The background thread should mark that specific episode as `FAILED` in the database, log the error, and move on to the next episode. The overall podcast job should still complete, providing a feed of the successfully processed episodes.
-* **AI Service Failure:** The Gemini API is temporarily unavailable or returns an error. The processing task should implement a retry mechanism with exponential backoff. If it ultimately fails after several retries, the episode is marked as `FAILED`.
+* **AI Service Failure:** The Gemini API is temporarily unavailable or returns an error. The processing task should implement a retry mechanism. If it ultimately fails, the episode is marked as `FAILED`.
 * **Audio Without Ads:** The AI service analyzes an episode and finds no ads. The system should gracefully handle this by skipping the audio processing step and simply re-hosting the original, unchanged audio file.
 
 ---
@@ -67,21 +65,22 @@ Our primary user, "Alex," is a technically savvy podcast listener. Alex is comfo
 
 ### 3.1. High-Level Architecture
 
-The architecture is composed of a single monolithic Django service, a shared file store, and a background worker system. This simplifies deployment and development by keeping all components in a single project.
+The architecture is a single monolithic Django application. This simplifies deployment and development by keeping all components in a single project. Long-running tasks are handled by background threads managed by a `ThreadPoolExecutor`.
+
 ```
       User Request (RSS URL)
             |
             v
 +--------------------------------------+
-|      podslice_core (Django/DRF)      |
-|       - API, Serves new Feed         |
+|      podslice (Django/DRF)           |
+|       - Web UI, API, Feeds           |
 |       - Serves rehosted media        |
 +--------------------------------------+
 |         ^           |
 | R/W     | R         | (1) Spawns Background Thread
 v         |           v
 +----------------+   +-----------------------------+
-| SQLite DB      |   | In-Memory Queue             |
+| SQLite DB      |   | ThreadPoolExecutor          |
 |                |   |                             |
 +----------------+   +-----------------------------+
                                   |
@@ -92,7 +91,7 @@ v         |           v
 |--------------------------------------------------------------------------|
 | 3. Downloads original_audio_url                                          |
 | 4. Sends audio to Google Gemini API -> gets ad timestamps                |
-| 5. Uses pydub to slice audio, removes ad segments                        |
+| 5. Uses ffmpeg to slice audio, removes ad segments                       |
 | 6. Saves new ad-free audio to /media storage                             |
 | 7. Updates SQLite DB with status and media metadata                      |
 +--------------------------------------------------------------------------+
@@ -101,9 +100,9 @@ v         |           v
 
 ### 3.2. Component Deep Dive
 
-* **`podslice_core` (The Monolith):** This Django project is the user's sole point of interaction. It validates input, manages the state of all processing jobs, orchestrates the background workers, and serves the final rehosted media files.
+* **`podslice` (The Monolith):** This Django project is the user's sole point of interaction. It provides the web interface, validates input, manages the state of all processing jobs, orchestrates the background threads, and serves the final rehosted media files.
 
-* **Asynchronous Task Processing:** We use background threads and an in-memory queue. **Justification:** This is a cornerstone of the "simplicity" principle. It removes the need to install, configure, and maintain a separate service like Redis or RabbitMQ. For the expected workload of this service, the performance of background threads is more than sufficient and its operational simplicity is a major advantage.
+* **Asynchronous Task Processing:** We use Python's built-in `threading` module and a `ThreadPoolExecutor`. **Justification:** This is a cornerstone of the "simplicity" principle. It removes the need to install, configure, and maintain a separate service like Redis or RabbitMQ. For the expected workload of this service, the performance of background threads is more than sufficient and its operational simplicity is a major advantage.
 
 * **Data Persistence:** We use a single SQLite database. **Justification:** This reinforces the monolithic nature of the architecture. SQLite is chosen for its zero-configuration, serverless nature, which perfectly aligns with the project's goal of being a simple, self-contained application.
 
@@ -112,17 +111,17 @@ v         |           v
 This diagram illustrates the precise flow of control and data between the components.
 
 ```
-User          podslice_core API     Background Thread    Gemini API
+User          Podslice Web/API        Background Thread    Gemini API
 |                    |                    |                    |
-+--POST /podcasts--->|                    |                    |
++--POST /subscribe/ ->|                    |                    |
 |                    +--Create Podcast--->|                    |
-|                    +--process_feed()---->|                    |
-|<--202 Accepted----+                    |                    |
+|                    +--poll_feed()------->|                    |
+|<--Redirect/200 OK--+                    |                    |
 |                    |                    +--Fetch/Parse RSS-->|
 |                    |                    +-rehost_audio()----->|
 |                    |                    |                    +---Analyze Audio-->|
 |                    |                    |                    |<----Timestamps----+
-|                    |                    +--Process w/ pydub->|
+|                    |                    +--Process w/ ffmpeg>|
 |                    |                    +--Write to DB------>|
 |                    |                    |                    |
 +--GET /feeds/id---->|                    |                    |
@@ -134,28 +133,32 @@ User          podslice_core API     Background Thread    Gemini API
 ```
 ## 4. Data Models & Schemas
 
-### 4.1. `podslice_core` Database Schema (`db.sqlite3`)
+### 4.1. Database Schema (`db.sqlite3`)
 
 * **`Podcast` model:**
     * `id` (UUIDField, Primary Key): A unique, non-sequential identifier.
     * `title` (CharField): The title of the podcast, extracted from the feed.
-    * `rss_feed_url` (URLField, unique): The original URL submitted by the user.
-    * `status` (CharField): The overall status of the podcast job. Choices: `PENDING`, `PROCESSING`, `COMPLETED`, `FAILED`.
-    * `created_at`, `updated_at` (DateTimeField): For tracking and debugging.
+    * `slug` (SlugField): URL-friendly slug.
+    * `rss_url` (URLField, unique): The original URL submitted by the user.
+    * `artwork_url` (URLField): URL for the podcast artwork.
+    * `last_polled` (DateTimeField): When the feed was last checked for new episodes.
 
 * **`Episode` model:**
     * `id` (UUIDField, Primary Key).
     * `podcast` (ForeignKey to `Podcast`): Links the episode to its parent podcast.
+    * `guid` (CharField): Unique ID for the episode from the RSS feed.
     * `title` (CharField): The episode title.
+    * `pub_date` (DateTimeField): Publication date of the episode.
     * `original_audio_url` (URLField): The original source URL of the audio file.
     * `rehosted_audio_url` (URLField, nullable): The final public URL pointing to the server.
-    * `ad_segments` (JSONField, nullable): Stores the list of ad timestamps from Gemini. E.g., `[{"start": 60.5, "end": 95.0}, {"start": 1800.2, "end": 1830.0}]`.
-    * `status` (CharField): The status of the individual episode job. Choices: `PENDING`, `DOWNLOADING`, `ANALYZING`, `PROCESSING`, `COMPLETED`, `FAILED`.
-    * `created_at`, `updated_at` (DateTimeField).
+    * `rehosted_audio_size` (BigIntegerField): Size of the rehosted audio file in bytes.
+    * `rehosted_media_id` (UUIDField): ID of the rehosted media in the `RehostedMedia` table.
+    * `ad_segments` (JSONField, nullable): Stores the list of ad timestamps from Gemini. E.g., `[{"start": 60.5, "end": 95.0}]`.
+    * `status` (CharField): The status of the individual episode job. Choices: `NEW`, `QUEUED`, `DOWNLOADING`, `ANALYZING`, `PROCESSING`, `COMPLETE`, `FAILED`.
 
 * **`RehostedMedia` model:**
     * `media_guid` (UUIDField, Primary Key): The unique identifier used in the public URL.
-    * `file_path` (FilePathField): The absolute path to the processed audio file on the shared `/media` volume.
+    * `file_path` (CharField): The absolute path to the processed audio file on the shared `/media` volume.
     * `content_type` (CharField): The MIME type of the audio file (e.g., `audio/mpeg`).
 
 ---
@@ -172,8 +175,8 @@ A robust testing strategy is non-negotiable. We will employ a multi-layered appr
 
 ### 5.2. Integration Tests
 
-* **API to Background Thread:** Test that a successful API call correctly creates a `Podcast` object and starts the `process_podcast_feed` task with the right parameters.
-* **Worker to Databases:** Test that the background thread can successfully read from and write to the database.
+* **API to Background Thread:** Test that a successful API call correctly creates a `Podcast` object and starts the `poll_feed` task with the right parameters.
+* **Thread to Databases:** Test that the background thread can successfully read from and write to the database.
 
 ### 5.3. End-to-End (E2E) Tests
 
@@ -183,48 +186,3 @@ A robust testing strategy is non-negotiable. We will employ a multi-layered appr
     3.  Fetches the new RSS feed and validates its structure.
     4.  Extracts the `rehosted_audio_url` for one episode.
     5.  Makes a `GET` request to that URL and asserts that it receives a `200 OK` response with the correct `Content-Type` header.
-
-### 5.4. Edge Case Testing Plan
-
-* **Invalid Feeds:** Create a suite of static, invalid feed files (malformed XML, missing required tags, etc.) and test that the system handles them gracefully.
-* **Network Failures:** Use libraries like `requests-mock` to simulate network errors (404s, 500s) from both the original audio source and the Gemini API. Verify that the tasks enter a `FAILED` state and log the appropriate error.
-* **Large Files:** Test with an unusually large audio file (e.g., >500MB) to ensure there are no memory or timeout issues during download and processing.
-* **No Ads Found:** Test with an audio file known to have no ads and verify that the `ad_segments` field remains empty and the file is re-hosted without modification.
-
----
-
-## 6. Detailed Project Plan & Execution
-
-This project is broken down into four distinct, executable phases.
-
-### Phase 1: Foundation & Core Service (`podslice_core`)
-
-* **Goal:** Establish the main application, its data models, and the API for job submission.
-* **Tasks:**
-    1.  **Setup `podslice_core` Project:** Initialize the Django project and the `podcasts` app. Configure the SQLite database.
-    2.  **Define Models:** Implement the `Podcast` and `Episode` models in `podcasts/models.py`. Generate and run the initial migration.
-    3.  **Implement Submission API:** Create the serializer and view for the `POST /api/podcasts/` endpoint. Initially, it will only create the `Podcast` object.
-    4.  **Implement Stub Task:** Create the `process_podcast_feed` task, but have it only parse the feed and create `Episode` objects without dispatching sub-tasks.
-    5.  **Connect API to Task:** Wire the submission API to start the `process_podcast_feed` task in a background thread.
-
-
-
-### Phase 3: The Worker Pipeline (The "Magic")
-
-* **Goal:** Implement the full, multi-step audio processing logic within a background thread.
-* **Tasks:**
-    1.  **Implement `rehost_episode_audio` Task:** Create the new background task.
-    2.  **Audio Download:** Add logic to download the audio file from `original_audio_url`.
-    
-    4.  **Gemini Integration:** Write the client code to send the audio file to the Gemini API and parse the timestamp response. Securely manage the API key.
-    5.  **Audio Slicing:** Use `pydub` to implement the ad removal based on the Gemini timestamps. Add logic to handle cases where no ads are found.
-    6.  **Finalize and Connect:** Update the `process_podcast_feed` task to dispatch the `rehost_episode_audio` task for each episode.
-
-### Phase 4: Finalization, Feeds & Status
-
-* **Goal:** Expose the results of the processing to the user.
-* **Tasks:**
-    1.  **Implement RSS Feed View:** Create the view at `/feeds/podcasts/<id>/rss.xml`. This view will query the database for the completed episodes and render a valid RSS XML response.
-    2.  **Implement Status API:** Create the `GET /api/podcasts/<id>/status/` endpoint, which will serialize the `Podcast` object and its related `Episode` objects to show detailed progress.
-    3.  **Testing and Validation:** Execute the full testing strategy outlined in Section 5.
-    4.  **Documentation:** Write a comprehensive `README.md` detailing the setup, configuration, and API usage for the entire system.
