@@ -1,161 +1,250 @@
-import logging
-import feedparser
-import threading
-import os
+"""
+Views for the podcasts app.
+"""
 import json
-from django.db import transaction
-from rest_framework import generics, serializers
-from django.shortcuts import render, redirect, get_object_or_404
-from django.views import View
-from django.urls import reverse
-from django.http import HttpResponse, FileResponse, Http404
-from django.template.loader import render_to_string
-from django.conf import settings
+import logging
+import os
+import threading
 from datetime import datetime, timedelta
 
-from .models import Podcast, Episode, RehostedMedia
-from .serializers import PodcastSerializer
-from .tasks import poll_feed, delete_podcast_data, reprocess_podcast
+import feedparser
+from django.conf import settings
+from django.db import transaction
+from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
+from django.urls import reverse
+from django.views import View
+from rest_framework import generics, serializers
 
-
-class OPML_ExportView(View):
-    def get(self, request):
-        podcasts = Podcast.objects.all()
-        for podcast in podcasts:
-            podcast.rehosted_rss_url = request.build_absolute_uri(
-                reverse('podcast-rss-feed-api', args=[podcast.id])
-            )
-
-        context = {
-            'podcasts': podcasts,
-            'created_at': datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
-        }
-        
-        opml_content = render_to_string('podcasts/opml_export.xml', context)
-        
-        response = HttpResponse(opml_content, content_type='application/xml')
-        response['Content-Disposition'] = 'attachment; filename="podslice_subscriptions.opml"'
-        return response
-
+from podcasts.models import Episode, Podcast, RehostedMedia
+from podcasts.serializers import PodcastSerializer
+from podcasts.tasks import delete_podcast_data, poll_feed, reprocess_podcast
 
 logger = logging.getLogger(__name__)
 
-BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/91.0.4472.124 Safari/537.36"
+)
+
+
+class OPMLExportView(View):
+    """
+    A view to export all podcast subscriptions as an OPML file.
+    """
+
+    def get(self, request):
+        """
+        Handles GET requests and returns an OPML file.
+        """
+        podcasts = Podcast.objects.all()
+        for podcast in podcasts:
+            podcast.rehosted_rss_url = request.build_absolute_uri(
+                reverse("podcast-rss-feed-api", args=[podcast.id])
+            )
+
+        context = {
+            "podcasts": podcasts,
+            "created_at": datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
+        }
+
+        opml_content = render_to_string("podcasts/opml_export.xml", context)
+
+        response = HttpResponse(opml_content, content_type="application/xml")
+        response["Content-Disposition"] = (
+            'attachment; filename="podslice_subscriptions.opml"'
+        )
+        return response
+
 
 def create_podcast_from_url(rss_url: str) -> Podcast:
     """
     Parses an RSS feed, creates a Podcast object, and dispatches a background task.
     """
-    logger.info(f"Starting subscription process for RSS URL: {rss_url}")
+    logger.info("Starting subscription process for RSS URL: %s", rss_url)
     try:
         with transaction.atomic():
-            logger.debug(f"Parsing feed: {rss_url}")
+            logger.debug("Parsing feed: %s", rss_url)
             feed = feedparser.parse(rss_url, agent=BROWSER_USER_AGENT)
             if feed.bozo:
-                logger.error(f"Malformed feed at {rss_url}. Reason: {feed.get('bozo_exception', 'Unknown')}")
-                raise ValueError(f"Feed is malformed. Reason: {feed.get('bozo_exception', 'Unknown')}")
-            
-            feed_title = feed.feed.get('title')
-            if not feed_title:
-                logger.error(f"No title found in feed: {rss_url}")
-                raise ValueError("Could not find a title in the parsed feed.")
-            
-            logger.debug(f"Feed '{feed_title}' parsed successfully.")
+                logger.error(
+                    "Malformed feed at %s. Reason: %s",
+                    rss_url,
+                    feed.get("bozo_exception", "Unknown"),
+                )
+                raise ValueError(
+                    f"Feed is malformed. Reason: {feed.get('bozo_exception', 'Unknown')}"
+                )
 
-            artwork_url = feed.feed.get('image', {}).get('href')
-            
+            feed_title = feed.feed.get("title")
+            if not feed_title:
+                logger.error("No title found in feed: %s", rss_url)
+                raise ValueError("Could not find a title in the parsed feed.")
+
+            logger.debug("Feed '%s' parsed successfully.", feed_title)
+
+            artwork_url = feed.feed.get("image", {}).get("href")
+
             podcast, created = Podcast.objects.get_or_create(
                 rss_url=rss_url,
-                defaults={'title': feed_title, 'artwork_url': artwork_url}
+                defaults={"title": feed_title, "artwork_url": artwork_url},
             )
 
             if not created:
-                logger.warning(f"Subscription attempt for existing feed: {rss_url}. Podcast ID: {podcast.id}")
+                logger.warning(
+                    "Subscription attempt for existing feed: %s. Podcast ID: %s",
+                    rss_url,
+                    podcast.id,
+                )
                 return podcast
 
-            logger.info(f"New podcast '{feed_title}' created with ID: {podcast.id}. Dispatching polling task.")
+            logger.info(
+                "New podcast '%s' created with ID: %s. Dispatching polling task.",
+                feed_title,
+                podcast.id,
+            )
             poll_thread = threading.Thread(target=poll_feed, args=(podcast.id,))
             poll_thread.start()
-            logger.debug(f"Polling task for Podcast ID {podcast.id} dispatched successfully.")
-        
+            logger.debug(
+                "Polling task for Podcast ID %s dispatched successfully.", podcast.id
+            )
+
         return podcast
-    except (ValueError, IOError) as e:
-        logger.error(f"Failed to process RSS feed at {rss_url}.", exc_info=True)
+    except (ValueError, IOError):
+        logger.error("Failed to process RSS feed at %s.", rss_url, exc_info=True)
         raise
     except Exception as e:
-        logger.error(f"An unexpected error occurred during podcast subscription for {rss_url}.", exc_info=True)
-        raise
+        logger.error(
+            "An unexpected error occurred during podcast subscription for %s.",
+            rss_url,
+            exc_info=True,
+        )
+        raise e
+
 
 class PodcastSubscribeUIView(View):
     """
     A view to render the subscription form and handle its submission.
     """
+
     def get(self, request):
+        """
+        Handles GET requests and renders the subscription form.
+        """
         podcasts = Podcast.objects.all()
-        return render(request, 'podcasts/subscribe.html', {'podcasts': podcasts})
+        return render(request, "podcasts/subscribe.html", {"podcasts": podcasts})
 
     def post(self, request):
-        rss_url = request.POST.get('rss_url')
+        """
+        Handles POST requests and creates a new podcast subscription.
+        """
+        rss_url = request.POST.get("rss_url")
         if not rss_url:
             podcasts = Podcast.objects.all()
-            return render(request, 'podcasts/subscribe.html', {'error': 'RSS URL is required.', 'podcasts': podcasts})
+            return render(
+                request,
+                "podcasts/subscribe.html",
+                {"error": "RSS URL is required.", "podcasts": podcasts},
+            )
 
         try:
             podcast = create_podcast_from_url(rss_url)
-            return redirect(reverse('podcast-status-ui', kwargs={'podcast_id': podcast.id}))
+            return redirect(
+                reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id})
+            )
         except Exception as e:
             podcasts = Podcast.objects.all()
-            return render(request, 'podcasts/subscribe.html', {'error': str(e), 'rss_url': rss_url, 'podcasts': podcasts})
+            return render(
+                request,
+                "podcasts/subscribe.html",
+                {"error": str(e), "rss_url": rss_url, "podcasts": podcasts},
+            )
+
 
 class PodcastStatusUIView(View):
     """
     A view to display the status of a podcast subscription.
     """
+
     def get(self, request, podcast_id):
+        """
+        Handles GET requests and renders the podcast status page.
+        """
         podcast = get_object_or_404(Podcast, id=podcast_id)
-        episodes = podcast.episodes.all().order_by('-pub_date')
+        episodes = podcast.episodes.all().order_by("-pub_date")
 
         for episode in episodes:
             episode.removed_duration_str = "N/A"
             if episode.ad_segments:
                 try:
-                    # The ad_segments can be a string from Gemini that needs to be cleaned
-                    # or a direct JSON string stored in the model.
-                    # This logic attempts to handle both cases.
                     cleaned_json = episode.ad_segments
-                    if '```json' in cleaned_json:
-                        cleaned_json = cleaned_json.split('```json\n')[1].split('\n```')[0]
-                    
+                    if "```json" in cleaned_json:
+                        cleaned_json = cleaned_json.split("```json\n")[1].split(
+                            "\n```"
+                        )[0]
+
                     ad_segments_list = json.loads(cleaned_json)
-                    
-                    total_removed_seconds = sum(seg.get('end', 0) - seg.get('start', 0) for seg in ad_segments_list)
-                    
+
+                    total_removed_seconds = sum(
+                        seg.get("end", 0) - seg.get("start", 0)
+                        for seg in ad_segments_list
+                    )
+
                     if total_removed_seconds > 0:
                         duration = timedelta(seconds=total_removed_seconds)
-                        total_minutes, remainder_seconds = divmod(int(duration.total_seconds()), 60)
-                        episode.removed_duration_str = f"{total_minutes}m {remainder_seconds}s"
+                        total_minutes, remainder_seconds = divmod(
+                            int(duration.total_seconds()), 60
+                        )
+                        episode.removed_duration_str = (
+                            f"{total_minutes}m {remainder_seconds}s"
+                        )
                     else:
                         episode.removed_duration_str = "0s"
                 except (json.JSONDecodeError, TypeError, KeyError, IndexError) as e:
-                    logger.warning(f"Could not parse ad_segments for episode {episode.id}. Error: {e}")
+                    logger.warning(
+                        "Could not parse ad_segments for episode %s. Error: %s",
+                        episode.id,
+                        e,
+                    )
                     episode.removed_duration_str = "Error"
 
-        return render(request, 'podcasts/status.html', {'podcast': podcast, 'episodes': episodes})
+        return render(
+            request, "podcasts/status.html", {"podcast": podcast, "episodes": episodes}
+        )
+
 
 class PodcastRefreshView(View):
+    """
+    A view to refresh a podcast feed.
+    """
+
     def post(self, request, podcast_id):
+        """
+        Handles POST requests and refreshes a podcast feed.
+        """
         podcast = get_object_or_404(Podcast, id=podcast_id)
         poll_thread = threading.Thread(target=poll_feed, args=(podcast.id,))
         poll_thread.start()
-        return redirect(reverse('podcast-status-ui', kwargs={'podcast_id': podcast.id}))
+        return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id}))
 
 
 class PodcastReprocessView(View):
+    """
+    A view to reprocess a podcast.
+    """
+
     def post(self, request, podcast_id):
+        """
+        Handles POST requests and reprocesses a podcast.
+        """
         podcast = get_object_or_404(Podcast, id=podcast_id)
-        reprocess_thread = threading.Thread(target=reprocess_podcast, args=(podcast.id,))
+        reprocess_thread = threading.Thread(
+            target=reprocess_podcast, args=(podcast.id,)
+        )
         reprocess_thread.start()
-        return redirect(reverse('podcast-status-ui', kwargs={'podcast_id': podcast.id}))
+        return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id}))
 
 
 class PodcastSubscriptionAPIView(generics.ListCreateAPIView):
@@ -163,6 +252,7 @@ class PodcastSubscriptionAPIView(generics.ListCreateAPIView):
     API view to list existing podcast subscriptions and create new ones.
     Handles POST /api/podcasts/
     """
+
     queryset = Podcast.objects.all()
     serializer_class = PodcastSerializer
 
@@ -170,13 +260,17 @@ class PodcastSubscriptionAPIView(generics.ListCreateAPIView):
         """
         This method is called by DRF after validation and before saving the object.
         """
-        rss_url = serializer.validated_data['rss_url']
+        rss_url = serializer.validated_data["rss_url"]
         try:
             create_podcast_from_url(rss_url)
         except (ValueError, IOError) as e:
-            raise serializers.ValidationError({"rss_url": [f"Could not fetch or parse the feed. Reason: {e}"]})
+            raise serializers.ValidationError(
+                {"rss_url": [f"Could not fetch or parse the feed. Reason: {e}"]}
+            ) from e
         except Exception as e:
-            raise serializers.ValidationError({"non_field_errors": [f"An unexpected server error occurred: {e}"]})
+            raise serializers.ValidationError(
+                {"non_field_errors": [f"An unexpected server error occurred: {e}"]}
+            ) from e
 
 
 class PodcastRSSFeedView(generics.RetrieveAPIView):
@@ -184,22 +278,28 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
     API view to serve the re-hosted RSS feed for a podcast.
     Handles GET /feeds/podcasts/<uuid:podcast_id>/rss.xml
     """
+
     queryset = Podcast.objects.all()
-    lookup_field = 'id'
-    lookup_url_kwarg = 'podcast_id'
+    lookup_field = "id"
+    lookup_url_kwarg = "podcast_id"
 
     def retrieve(self, request, *args, **kwargs):
+        """
+        Handles GET requests and returns the re-hosted RSS feed.
+        """
         podcast = self.get_object()
-        episodes = podcast.episodes.filter(status=Episode.Status.COMPLETE).order_by('-pub_date')
+        episodes = podcast.episodes.filter(status=Episode.Status.COMPLETE).order_by(
+            "-pub_date"
+        )
 
         context = {
-            'podcast': podcast,
-            'episodes': episodes,
-            'build_date': datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
-            'rehost_base_url': settings.REHOST_BASE_URL,
+            "podcast": podcast,
+            "episodes": episodes,
+            "build_date": datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
+            "rehost_base_url": settings.REHOST_BASE_URL,
         }
-        rss_feed = render_to_string('podcasts/rss_feed_template.xml', context)
-        return HttpResponse(rss_feed, content_type='application/xml')
+        rss_feed = render_to_string("podcasts/rss_feed_template.xml", context)
+        return HttpResponse(rss_feed, content_type="application/xml")
 
 
 class PodcastStatusAPIView(generics.RetrieveAPIView):
@@ -207,26 +307,35 @@ class PodcastStatusAPIView(generics.RetrieveAPIView):
     API view to retrieve the status of a podcast and its episodes.
     Handles GET /api/podcasts/<uuid:podcast_id>/status/
     """
+
     queryset = Podcast.objects.all()
     serializer_class = PodcastSerializer
-    lookup_field = 'id'
-    lookup_url_kwarg = 'podcast_id'
+    lookup_field = "id"
+    lookup_url_kwarg = "podcast_id"
+
 
 class PodcastDeleteAPIView(generics.DestroyAPIView):
     """
     API view to delete a podcast subscription and its associated data.
     Handles DELETE /api/podcasts/<uuid:podcast_id>/
     """
+
     queryset = Podcast.objects.all()
-    lookup_field = 'id'
-    lookup_url_kwarg = 'podcast_id'
+    lookup_field = "id"
+    lookup_url_kwarg = "podcast_id"
 
     def perform_destroy(self, instance):
+        """
+        Handles DELETE requests and deletes a podcast subscription.
+        """
         podcast_id = instance.id
         # Dispatch the deletion task to run in the background
-        deletion_thread = threading.Thread(target=delete_podcast_data, args=(podcast_id,))
+        deletion_thread = threading.Thread(
+            target=delete_podcast_data, args=(podcast_id,)
+        )
         deletion_thread.start()
-        logger.info(f"Dispatched deletion task for Podcast ID: {podcast_id}")
+        logger.info("Dispatched deletion task for Podcast ID: %s", podcast_id)
+
 
 def serve_rehosted_media(request, media_guid):
     """
@@ -244,31 +353,32 @@ def serve_rehosted_media(request, media_guid):
         A FileResponse object that streams the media file, or raises
         an Http404 exception if the media is not found.
     """
-    logger.info(f"Attempting to serve media for GUID: {media_guid}")
+    logger.info("Attempting to serve media for GUID: %s", media_guid)
     try:
         media_item = RehostedMedia.objects.get(pk=media_guid)
-        logger.info(f"Found RehostedMedia record for GUID {media_guid}. File path: {media_item.file_path}")
-    except RehostedMedia.DoesNotExist:
-        logger.error(f"RehostedMedia record not found in database for GUID: {media_guid}")
-        raise Http404("Media file record not found in the database.")
+        logger.info(
+            "Found RehostedMedia record for GUID %s. File path: %s",
+            media_guid,
+            media_item.file_path,
+        )
+    except RehostedMedia.DoesNotExist as e:
+        logger.error(
+            "RehostedMedia record not found in database for GUID: %s", media_guid
+        )
+        raise Http404("Media file record not found in the database.") from e
 
-    # Step 2: Perform a crucial security and integrity check.
-    # Verify that the file path stored in the database actually points
-    # to a file that exists on the server's filesystem.
     if not os.path.exists(media_item.file_path):
-         # This could happen if a file was deleted manually.
-         # Log this error in a real production system.
-         logger.error(f"Media file not found on disk for GUID {media_guid}. Path: {media_item.file_path}")
-         raise Http404("The media file is registered but was not found on disk.")
+        logger.error(
+            "Media file not found on disk for GUID %s. Path: %s",
+            media_guid,
+            media_item.file_path,
+        )
+        raise Http404("The media file is registered but was not found on disk.")
 
-    # Step 3: Use Django's FileResponse.
-    # This is the most efficient way to serve large files, as it streams
-    # the file from disk directly to the response without loading the
-    # entire file into memory. This is critical for performance and
-    # for handling large podcast episodes.
-    logger.info(f"Serving file {media_item.file_path} for GUID {media_guid}")
-    response = FileResponse(
-        open(media_item.file_path, 'rb'),
-        content_type=media_item.content_type
-    )
+    logger.info("Serving file %s for GUID %s", media_item.file_path, media_guid)
+    try:
+        with open(media_item.file_path, "rb") as f:
+            response = FileResponse(f, content_type=media_item.content_type)
+    except FileNotFoundError as e:
+        raise Http404("The media file is registered but was not found on disk.") from e
     return response

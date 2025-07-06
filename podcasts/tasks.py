@@ -1,24 +1,27 @@
+"""
+This module contains Celery tasks for the podcasts app.
+"""
+import json
 import logging
 import os
-import time
-from datetime import datetime
-import uuid
-import json
-import threading
 import re
-from typing import List, Dict, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor
 import subprocess
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 import feedparser
+import google.generativeai as genai
 import requests
 from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
-import google.generativeai as genai
 from pydub import AudioSegment
 
-from .models import Episode, Podcast, RehostedMedia
+from podcasts.models import Episode, Podcast, RehostedMedia
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +29,11 @@ logger = logging.getLogger(__name__)
 BROWSER_USER_AGENT = getattr(
     settings,
     "BROWSER_USER_AGENT",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/91.0.4472.124 Safari/537.36",
 )
-GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=settings.DOWNLOAD_WORKER_COUNT)
 EPISODES_PER_FEED = getattr(settings, "EPISODES_PER_FEED", 5)
 EPISODE_LIMIT = getattr(settings, "EPISODE_LIMIT", 5)
@@ -37,7 +42,9 @@ EPISODE_LIMIT = getattr(settings, "EPISODE_LIMIT", 5)
 polling_locks = {}
 
 GEMINI_PROMPT = """
-You are an audio editing assistant. Your sole task is to analyze a podcast audio file and identify all segments that are **not** the main content. The goal is to create a list of timestamps for segments that can be removed.
+You are an audio editing assistant. Your sole task is to analyze a podcast audio file 
+and identify all segments that are **not** the main content. The goal is to create a list 
+of timestamps for segments that can be removed.
 Identify the precise start and end times for any of the following non-essential audio segments:
 * **Advertisements** (pre-produced ads, host-read sponsor messages)
 * **Introduction Music/Jingles**
@@ -60,6 +67,7 @@ class AdManager:
     """Handles the analysis of audio files to detect ad segments using the Gemini API."""
 
     def __init__(self, episode: Episode):
+        """Initializes the AdManager."""
         self.episode = episode
 
     def _get_ad_segments_from_gemini(
@@ -81,14 +89,20 @@ class AdManager:
     def _parse_ad_segments(self, gemini_response: str) -> List[Dict[str, float]]:
         """Parses the JSON response from Gemini to extract ad segments."""
         logger.debug(
-            f"Parsing Gemini response for Episode '{self.episode.title}' ({self.episode.id}): {gemini_response}"
+            "Parsing Gemini response for Episode '%s' (%s): %s",
+            self.episode.title,
+            self.episode.id,
+            gemini_response,
         )
         match = re.search(
-            r"```json\n(\[.*?\])\n```|(\[.*?\])", gemini_response, re.DOTALL
+            r"```json\n([.*?])\n```|([.*?])",
+            gemini_response, re.DOTALL
         )
         if not match:
             logger.warning(
-                f"No valid JSON array found in Gemini response for Episode '{self.episode.title}' ({self.episode.id})."
+                "No valid JSON array found in Gemini response for Episode '%s' (%s).",
+                self.episode.title,
+                self.episode.id,
             )
             return []
 
@@ -104,7 +118,10 @@ class AdManager:
             return ad_segments_list
         except json.JSONDecodeError:
             logger.warning(
-                f"Gemini API returned invalid JSON for ad segments for Episode '{self.episode.title}' ({self.episode.id}). Response: {json_string}"
+                "Gemini API returned invalid JSON for ad segments for Episode '%s' (%s). Response: %s",
+                self.episode.title,
+                self.episode.id,
+                json_string,
             )
             return []
 
@@ -118,7 +135,9 @@ class AdManager:
         self.episode.ad_segments = gemini_response
         self.episode.save(update_fields=["ad_segments"])
         logger.info(
-            f"Gemini analysis complete for '{self.episode.title}'. Ad segments: {gemini_response}"
+            "Gemini analysis complete for '%s'. Ad segments: %s",
+            self.episode.title,
+            gemini_response,
         )
         return self._parse_ad_segments(gemini_response)
 
@@ -127,6 +146,7 @@ class EpisodeProcessor:
     """Handles the processing of a single episode, from download to re-hosting."""
 
     def __init__(self, episode: Episode):
+        """Initializes the EpisodeProcessor."""
         self.episode = episode
         self.ad_manager = AdManager(episode)
 
@@ -136,7 +156,10 @@ class EpisodeProcessor:
         if save:
             self.episode.save(update_fields=["status"])
         logger.info(
-            f"Episode '{self.episode.title}' ({self.episode.id}) status updated to {status.label}."
+            "Episode '%s' (%s) status updated to %s.",
+            self.episode.title,
+            self.episode.id,
+            status.label,
         )
 
     def _create_rehosted_media_path(self, output_suffix: str = ".mp3") -> str:
@@ -158,17 +181,22 @@ class EpisodeProcessor:
                 content_type=output_mime_type,
             )
             logger.info(
-                f"Successfully created RehostedMedia record for '{self.episode.title}' (GUID: {media_entry.media_guid})"
+                "Successfully created RehostedMedia record for '%s' (GUID: %s)",
+                self.episode.title,
+                media_entry.media_guid,
             )
-        except Exception:
+        except Exception as e:
             logger.error(
-                f"Failed to create RehostedMedia record for '{self.episode.title}'",
+                "Failed to create RehostedMedia record for '%s'",
+                self.episode.title,
                 exc_info=True,
             )
             os.remove(final_audio_path)
-            raise
+            raise e
 
-        relative_url = reverse("serve_media_episode", kwargs={"media_guid": media_entry.media_guid})
+        relative_url = reverse(
+            "serve_media_episode", kwargs={"media_guid": media_entry.media_guid}
+        )
         self.episode.rehosted_audio_url = f"{settings.REHOST_BASE_URL}{relative_url}"
         self.episode.rehosted_audio_size = file_size
         self.episode.rehosted_media_id = media_entry.media_guid
@@ -182,7 +210,9 @@ class EpisodeProcessor:
             ]
         )
         logger.info(
-            f"Rehost completed successfully for Episode '{self.episode.title}' ({self.episode.id})."
+            "Rehost completed successfully for Episode '%s' (%s).",
+            self.episode.title,
+            self.episode.id,
         )
 
     def _download_audio(self) -> Optional[str]:
@@ -190,9 +220,13 @@ class EpisodeProcessor:
         self._update_status(Episode.Status.DOWNLOADING)
         try:
             logger.info(
-                f"Downloading audio for '{self.episode.title}' from {self.episode.original_audio_url}"
+                "Downloading audio for '%s' from %s",
+                self.episode.title,
+                self.episode.original_audio_url,
             )
-            response = requests.get(self.episode.original_audio_url, stream=True)
+            response = requests.get(
+                self.episode.original_audio_url, stream=True, timeout=60
+            )
             response.raise_for_status()
 
             media_dir = settings.MEDIA_ROOT
@@ -204,12 +238,15 @@ class EpisodeProcessor:
                     f.write(chunk)
 
             logger.info(
-                f"Audio for Episode '{self.episode.title}' downloaded to {temp_file_path}."
+                "Audio for Episode '%s' downloaded to %s.",
+                self.episode.title,
+                temp_file_path,
             )
             return temp_file_path
         except requests.exceptions.RequestException:
             logger.error(
-                f"Failed to download audio for Episode '{self.episode.title}'",
+                "Failed to download audio for Episode '%s'",
+                self.episode.title,
                 exc_info=True,
             )
             self._update_status(Episode.Status.FAILED)
@@ -229,13 +266,15 @@ class EpisodeProcessor:
                 audio_path,
             ]
             result = subprocess.run(
-                ffprobe_cmd, capture_output=True, text=True, check=True
+                ffprobe_cmd, capture_output=True, text=True, check=True, timeout=60
             )
             duration_str = result.stdout.strip()
 
             if duration_str == "N/A" or not duration_str:
                 logger.error(
-                    f"ffprobe could not determine duration for '{self.episode.title}'. Output: '{duration_str}'"
+                    "ffprobe could not determine duration for '%s'. Output: '%s'",
+                    self.episode.title,
+                    duration_str,
                 )
                 self._update_status(Episode.Status.FAILED)
                 return None
@@ -243,7 +282,8 @@ class EpisodeProcessor:
             return float(duration_str)
         except (subprocess.CalledProcessError, ValueError):
             logger.error(
-                f"ffprobe failed for '{self.episode.title}'.",
+                "ffprobe failed for '%s'.",
+                self.episode.title,
                 exc_info=True,
             )
             self._update_status(Episode.Status.FAILED)
@@ -317,20 +357,29 @@ class EpisodeProcessor:
             final_audio_path,
         ]
         logger.info(
-            f"Executing ffmpeg command for '{self.episode.title}': {' '.join(ffmpeg_cmd)}"
+            "Executing ffmpeg command for '%s': %s",
+            self.episode.title,
+            " ".join(ffmpeg_cmd),
         )
         try:
-            subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ffmpeg_cmd, check=True, capture_output=True, text=True, timeout=300
+            )
             file_size = os.path.getsize(final_audio_path)
             return final_audio_path, file_size
         except subprocess.CalledProcessError as e:
-            logger.error(f"ffmpeg failed for '{self.episode.title}'. Stderr: {e.stderr}")
-            raise Exception(f"ffmpeg processing failed for episode {self.episode.id}")
+            logger.error(
+                "ffmpeg failed for '%s'. Stderr: %s", self.episode.title, e.stderr
+            )
+            raise Exception(
+                f"ffmpeg processing failed for episode {self.episode.id}"
+            ) from e
 
     def _save_original_audio_as_rehosted(self, audio_path: str):
         """Saves the original audio as re-hosted if no ads are found."""
         logger.info(
-            f"No ad segments to slice for '{self.episode.title}'. Saving original audio."
+            "No ad segments to slice for '%s'. Saving original audio.",
+            self.episode.title,
         )
         final_audio_path = self._create_rehosted_media_path()
         os.rename(audio_path, final_audio_path)
@@ -340,7 +389,8 @@ class EpisodeProcessor:
     def _save_empty_audio_as_rehosted(self):
         """Saves an empty audio file if ads cover the entire duration."""
         logger.warning(
-            f"Ad segments covered the entire audio for '{self.episode.title}'. Result will be an empty file."
+            "Ad segments covered the entire audio for '%s'. Result will be an empty file.",
+            self.episode.title,
         )
         final_audio_path = self._create_rehosted_media_path()
         AudioSegment.empty().export(final_audio_path, format="mp3")
@@ -359,7 +409,9 @@ class EpisodeProcessor:
             return
 
         logger.debug(
-            f"Slicing audio for '{self.episode.title}' to remove {len(ad_segments)} ad segments."
+            "Slicing audio for '%s' to remove %d ad segments.",
+            self.episode.title,
+            len(ad_segments),
         )
         filter_complex = self._generate_ffmpeg_filter_complex(
             ad_segments, audio_duration_seconds
@@ -367,12 +419,14 @@ class EpisodeProcessor:
 
         if not filter_complex:
             logger.info(
-                f"Did not get any ad segment slices for '{self.episode.title}'"
+                "Did not get any ad segment slices for '%s'", self.episode.title
             )
             self._save_empty_audio_as_rehosted()
         else:
             logger.info(
-                f"Using the following ad segment slices for '{self.episode.title}': {filter_complex}"
+                "Using the following ad segment slices for '%s': %s",
+                self.episode.title,
+                filter_complex,
             )
             final_audio_path, file_size = self._run_ffmpeg_slicing(
                 audio_path, filter_complex
@@ -389,12 +443,16 @@ class EpisodeProcessor:
                 Episode.Status.PROCESSING,
             ]:
                 logger.warning(
-                    f"Skipping rehost task for '{self.episode.title}' because it is already in progress (status: {self.episode.get_status_display()})."
+                    "Skipping rehost task for '%s' because it is already in progress (status: %s).",
+                    self.episode.title,
+                    self.episode.get_status_display(),
                 )
                 return
 
             logger.info(
-                f"Starting rehost task for '{self.episode.title}' from podcast '{self.episode.podcast.title}'."
+                "Starting rehost task for '%s' from podcast '%s'.",
+                self.episode.title,
+                self.episode.podcast.title,
             )
 
             prepared_audio = self._fetch_and_prepare_audio()
@@ -413,7 +471,8 @@ class EpisodeProcessor:
 
         except Exception:
             logger.error(
-                f"An unexpected error occurred during rehosting of '{self.episode.title}'",
+                "An unexpected error occurred during rehosting of '%s'",
+                self.episode.title,
                 exc_info=True,
             )
             self._update_status(Episode.Status.FAILED)
@@ -421,7 +480,9 @@ class EpisodeProcessor:
             if audio_path and os.path.exists(audio_path):
                 os.remove(audio_path)
             logger.info(
-                f"Finished rehost task for Episode '{self.episode.title}' ({self.episode.id})."
+                "Finished rehost task for Episode '%s' (%s).",
+                self.episode.title,
+                self.episode.id,
             )
 
 
@@ -429,6 +490,7 @@ class FeedManager:
     """Manages the polling of a podcast feed and the processing of its episodes."""
 
     def __init__(self, podcast: Podcast):
+        """Initializes the FeedManager."""
         self.podcast = podcast
 
     def _get_episodes_to_process(self) -> set:
@@ -447,7 +509,8 @@ class FeedManager:
             ).update(status=Episode.Status.NEW)
             if failed_episodes_count > 0:
                 logger.info(
-                    f"Reset status to NEW for {failed_episodes_count} failed episodes."
+                    "Reset status to NEW for %d failed episodes.",
+                    failed_episodes_count,
                 )
 
         stuck_threshold = timezone.now() - timezone.timedelta(hours=1)
@@ -461,31 +524,37 @@ class FeedManager:
         )
         for episode in stuck_episodes:
             logger.warning(
-                f"Episode '{episode.title}' is stuck. Resetting to NEW for reprocessing."
+                "Episode '%s' is stuck. Resetting to NEW for reprocessing.",
+                episode.title,
             )
             episode.status = Episode.Status.NEW
             episode.save(update_fields=["status"])
             episodes_to_process.add(episode.id)
 
         logger.info(
-            f"Found {len(episodes_to_process)} existing episodes to process for '{self.podcast.title}'."
+            "Found %d existing episodes to process for '%s'.",
+            len(episodes_to_process),
+            self.podcast.title,
         )
         return episodes_to_process
 
     def _fetch_and_parse_feed(self) -> Optional[feedparser.FeedParserDict]:
         """Fetches and parses the RSS feed for the podcast."""
         try:
-            logger.debug(f"Fetching RSS feed from {self.podcast.rss_url}")
+            logger.debug("Fetching RSS feed from %s", self.podcast.rss_url)
             feed = feedparser.parse(self.podcast.rss_url, agent=BROWSER_USER_AGENT)
             if feed.bozo:
                 logger.error(
-                    f"Malformed feed for '{self.podcast.title}'. Reason: {feed.get('bozo_exception', 'Unknown')}"
+                    "Malformed feed for '%s'. Reason: %s",
+                    self.podcast.title,
+                    feed.get("bozo_exception", "Unknown"),
                 )
                 return None
             return feed
         except Exception:
             logger.error(
-                f"Failed to fetch or parse feed for '{self.podcast.title}'",
+                "Failed to fetch or parse feed for '%s'",
+                self.podcast.title,
                 exc_info=True,
             )
             return None
@@ -497,7 +566,9 @@ class FeedManager:
         guid = entry.get("id")
         if not guid:
             logger.warning(
-                f"Skipping entry in '{self.podcast.title}' due to missing GUID. Title: '{entry.get('title', 'N/A')}'"
+                "Skipping entry in '%s' due to missing GUID. Title: '%s'",
+                self.podcast.title,
+                entry.get("title", "N/A"),
             )
             return None
 
@@ -511,14 +582,20 @@ class FeedManager:
         )
         if not audio_url:
             logger.warning(
-                f"Skipping entry '{entry.get('title', 'N/A')}' (GUID: {guid}) in '{self.podcast.title}' due to missing audio enclosure."
+                "Skipping entry '%s' (GUID: %s) in '%s' due to missing audio enclosure.",
+                entry.get("title", "N/A"),
+                guid,
+                self.podcast.title,
             )
             return None
 
         pub_date_parsed = entry.get("published_parsed")
         if not pub_date_parsed:
             logger.warning(
-                f"Skipping entry '{entry.get('title', 'N/A')}' (GUID: {guid}) in '{self.podcast.title}' due to missing publication date."
+                "Skipping entry '%s' (GUID: %s) in '%s' due to missing publication date.",
+                entry.get("title", "N/A"),
+                guid,
+                self.podcast.title,
             )
             return None
 
@@ -540,7 +617,9 @@ class FeedManager:
             return episode, created
         except Exception:
             logger.error(
-                f"Failed to create episode with GUID {guid} for podcast '{self.podcast.title}'.",
+                "Failed to create episode with GUID %s for podcast '%s'.",
+                guid,
+                self.podcast.title,
                 exc_info=True,
             )
             return None
@@ -552,7 +631,9 @@ class FeedManager:
         new_episodes_count = 0
         skipped_episodes_count = 0
         logger.info(
-            f"Processing the latest {EPISODES_PER_FEED} episodes from '{self.podcast.title}'."
+            "Processing the latest %d episodes from '%s'.",
+            EPISODES_PER_FEED,
+            self.podcast.title,
         )
         for entry in feed.entries[:EPISODES_PER_FEED]:
             result = self._create_or_update_episode_from_entry(entry)
@@ -561,13 +642,18 @@ class FeedManager:
                 if created:
                     new_episodes_count += 1
                     logger.info(
-                        f"New episode created: '{episode.title}' for podcast '{self.podcast.title}'."
+                        "New episode created: '%s' for podcast '%s'.",
+                        episode.title,
+                        self.podcast.title,
                     )
                     episodes_to_process.add(episode.id)
                 else:
                     skipped_episodes_count += 1
         logger.info(
-            f"Polling complete for '{self.podcast.title}'. Found {new_episodes_count} new episodes. Skipped {skipped_episodes_count} existing episodes."
+            "Polling complete for '%s'. Found %d new episodes. Skipped %d existing episodes.",
+            self.podcast.title,
+            new_episodes_count,
+            skipped_episodes_count,
         )
 
     def _delete_episode_media(self, episode: Episode):
@@ -578,19 +664,26 @@ class FeedManager:
                 if os.path.exists(media_item.file_path):
                     os.remove(media_item.file_path)
                     logger.debug(
-                        f"Deleted physical file for '{episode.title}': {media_item.file_path}"
+                        "Deleted physical file for '%s': %s",
+                        episode.title,
+                        media_item.file_path,
                     )
                 media_item.delete()
                 logger.debug(
-                    f"Deleted RehostedMedia entry for '{episode.title}' (GUID: {media_item.media_guid})"
+                    "Deleted RehostedMedia entry for '%s' (GUID: %s)",
+                    episode.title,
+                    media_item.media_guid,
                 )
             except RehostedMedia.DoesNotExist:
                 logger.warning(
-                    f"RehostedMedia record not found for '{episode.title}' (media ID: {episode.rehosted_media_id})"
+                    "RehostedMedia record not found for '%s' (media ID: %s)",
+                    episode.title,
+                    episode.rehosted_media_id,
                 )
             except Exception:
                 logger.error(
-                    f"Error deleting media for episode '{episode.title}'",
+                    "Error deleting media for episode '%s'",
+                    episode.title,
                     exc_info=True,
                 )
 
@@ -600,23 +693,27 @@ class FeedManager:
         if all_episodes.count() > EPISODE_LIMIT:
             episodes_to_delete = all_episodes[EPISODE_LIMIT:]
             logger.info(
-                f"Enforcing episode limit. Deleting {len(episodes_to_delete)} old episodes for '{self.podcast.title}'."
+                "Enforcing episode limit. Deleting %d old episodes for '%s'.",
+                len(episodes_to_delete),
+                self.podcast.title,
             )
             for episode in episodes_to_delete:
                 self._delete_episode_media(episode)
                 episode.delete()
-                logger.info(f"Deleted old episode: '{episode.title}'")
+                logger.info("Deleted old episode: '%s'", episode.title)
 
     def _dispatch_rehosting_tasks(self, episode_ids: set):
         """Dispatches re-hosting tasks for the given episode IDs."""
         for episode_id in episode_ids:
-            logger.info(f"Dispatching re-hosting task for episode ID '{episode_id}'.")
+            logger.info("Dispatching re-hosting task for episode ID '%s'.", episode_id)
             DOWNLOAD_POOL.submit(rehost_episode_audio, episode_id)
 
     def poll(self):
         """
         Main method to poll the podcast feed.
-        This method is locked to prevent multiple polling tasks for the same podcast from running at the same time.
+
+        This method is locked to prevent multiple polling tasks for the same podcast
+        from running at the same time.
         """
         lock = polling_locks.get(self.podcast.id)
         if lock is None:
@@ -625,12 +722,13 @@ class FeedManager:
 
         if not lock.acquire(blocking=False):
             logger.warning(
-                f"Polling for podcast {self.podcast.id} is already in progress. Skipping."
+                "Polling for podcast %s is already in progress. Skipping.",
+                self.podcast.id,
             )
             return
 
         try:
-            logger.info(f"Starting poll for Podcast ID: {self.podcast.id}")
+            logger.info("Starting poll for Podcast ID: %s", self.podcast.id)
             self.podcast.last_polled = timezone.now()
             self.podcast.save(update_fields=["last_polled"])
 
@@ -648,10 +746,12 @@ class FeedManager:
     def reprocess_podcast(self):
         """Reprocesses all episodes for the podcast."""
         logger.info(
-            f"Starting reprocessing task for Podcast '{self.podcast.title}' ({self.podcast.id})."
+            "Starting reprocessing task for Podcast '%s' (%s).",
+            self.podcast.title,
+            self.podcast.id,
         )
         for episode in self.podcast.episodes.all():
-            logger.info(f"Resetting episode '{episode.title}' for reprocessing.")
+            logger.info("Resetting episode '%s' for reprocessing.", episode.title)
             self._delete_episode_media(episode)
             episode.status = Episode.Status.NEW
             episode.rehosted_media_id = None
@@ -660,20 +760,23 @@ class FeedManager:
             episode.ad_segments = None
             episode.save()
             DOWNLOAD_POOL.submit(rehost_episode_audio, episode.id)
-            logger.info(f"Dispatched re-hosting task for episode '{episode.title}'.")
+            logger.info("Dispatched re-hosting task for episode '%s'.", episode.title)
         logger.info(
-            f"Completed dispatching reprocessing tasks for all episodes of podcast '{self.podcast.title}'."
+            "Completed dispatching reprocessing tasks for all episodes of podcast '%s'.",
+            self.podcast.title,
         )
 
     def delete_podcast_data(self):
         """Deletes all data associated with the podcast."""
-        logger.info(f"Starting deletion task for Podcast ID: {self.podcast.id}")
+        logger.info("Starting deletion task for Podcast ID: %s", self.podcast.id)
         for episode in self.podcast.episodes.all():
             self._delete_episode_media(episode)
         podcast_title = self.podcast.title
         self.podcast.delete()
         logger.info(
-            f"Successfully deleted podcast '{podcast_title}' ({self.podcast.id}) and all its associated data."
+            "Successfully deleted podcast '%s' (%s) and all its associated data.",
+            podcast_title,
+            self.podcast.id,
         )
 
 
@@ -684,8 +787,7 @@ def rehost_episode_audio(episode_id: uuid.UUID):
         processor = EpisodeProcessor(episode)
         processor.rehost_audio()
     except Episode.DoesNotExist:
-        logger.error(f"Episode with ID {episode_id} not found. Aborting rehost task.")
-        return
+        logger.error("Episode with ID %s not found. Aborting rehost task.", episode_id)
 
 
 def poll_feed(podcast_id: uuid.UUID):
@@ -695,8 +797,7 @@ def poll_feed(podcast_id: uuid.UUID):
         manager = FeedManager(podcast)
         manager.poll()
     except Podcast.DoesNotExist:
-        logger.error(f"Podcast with ID {podcast_id} not found. Aborting task.")
-        return
+        logger.error("Podcast with ID %s not found. Aborting task.", podcast_id)
 
 
 def reprocess_podcast(podcast_id: uuid.UUID):
@@ -707,9 +808,8 @@ def reprocess_podcast(podcast_id: uuid.UUID):
         manager.reprocess_podcast()
     except Podcast.DoesNotExist:
         logger.error(
-            f"Podcast with ID {podcast_id} not found. Aborting reprocess task."
+            "Podcast with ID %s not found. Aborting reprocess task.", podcast_id
         )
-        return
 
 
 def delete_podcast_data(podcast_id: uuid.UUID):
@@ -719,9 +819,12 @@ def delete_podcast_data(podcast_id: uuid.UUID):
         manager = FeedManager(podcast)
         manager.delete_podcast_data()
     except Podcast.DoesNotExist:
-        logger.error(f"Podcast with ID {podcast_id} not found. Aborting deletion task.")
+        logger.error(
+            "Podcast with ID %s not found. Aborting deletion task.", podcast_id
+        )
     except Exception:
         logger.error(
-            f"An error occurred during podcast deletion for ID {podcast_id}",
+            "An error occurred during podcast deletion for ID %s",
+            podcast_id,
             exc_info=True,
         )

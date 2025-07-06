@@ -10,9 +10,14 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import logging
 import os
 from pathlib import Path
+
 from django.core.exceptions import ImproperlyConfigured
+from django.core.management.utils import get_random_secret_key
+
+logger = logging.getLogger(__name__)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,12 +29,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
-    raise ImproperlyConfigured("DJANGO_SECRET_KEY environment variable not set.")
+    SECRET_KEY = get_random_secret_key()
+    logger.error("DJANGO_SECRET_KEY environment variable not set. Creating default key.")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['192.168.68.83', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ["192.168.68.83", "localhost", "127.0.0.1"]
+
+DOWNLOAD_WORKER_COUNT = 1
 
 
 # Application definition
@@ -42,9 +50,9 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     # 3rd Party Apps
-    'rest_framework',
+    "rest_framework",
     # Local Apps
-    'podcasts', # Add this line
+    "podcasts",  # Add this line
 ]
 
 MIDDLEWARE = [
@@ -143,25 +151,23 @@ if not GEMINI_API_KEY:
     raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
 
 
-
-      
 LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {message}',
-            'style': '{',
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {message}",
+            "style": "{",
         },
     },
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
         },
     },
-    'root': {
-        'handlers': ['console'],
-        'level': 'DEBUG', # You can set this to 'DEBUG' for even more verbosity
+    "root": {
+        "handlers": ["console"],
+        "level": "DEBUG",  # You can set this to 'DEBUG' for even more verbosity
     },
 }

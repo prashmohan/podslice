@@ -1,5 +1,9 @@
+"""
+Serializers for the podcasts app.
+"""
 from rest_framework import serializers
-from .models import Podcast, Episode
+
+from podcasts.models import Episode, Podcast
 
 
 class EpisodeSerializer(serializers.ModelSerializer):
@@ -30,4 +34,3 @@ class PodcastSerializer(serializers.ModelSerializer):
                 "Podcast with this RSS URL already exists."
             )
         return value
-        

@@ -10,3 +10,4 @@ feedparser
 requests
 google-generativeai
 pydub
+pylint-django

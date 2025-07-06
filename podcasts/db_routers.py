@@ -1,16 +1,22 @@
+"""
+Database router for the rehost_app.
+"""
+
+
 class RehostRouter:
     """
     A router to control all database operations on models in the
     rehost_app application.
     """
-    route_app_labels = {'rehost_app'}
+
+    route_app_labels = {"rehost_app"}
 
     def db_for_read(self, model, **hints):
         """
         Attempts to read rehost_app models go to rehost_db.
         """
         if model._meta.app_label in self.route_app_labels:
-            return 'rehost_db'
+            return "rehost_db"
         return None
 
     def db_for_write(self, model, **hints):
@@ -18,7 +24,7 @@ class RehostRouter:
         Attempts to write rehost_app models go to rehost_db.
         """
         if model._meta.app_label in self.route_app_labels:
-            return 'rehost_db'
+            return "rehost_db"
         return None
 
     def allow_relation(self, obj1, obj2, **hints):
@@ -32,10 +38,10 @@ class RehostRouter:
             return True
         return None
 
-    def allow_migrate(self, db, app_label, model_name=None, **hints):
+    def allow_migrate(self, db, app_label, model_name=None, **_hints):
         """
         Make sure the rehost_app only appears in the 'rehost_db' database.
         """
         if app_label in self.route_app_labels:
-            return db == 'rehost_db'
+            return db == "rehost_db"
         return None

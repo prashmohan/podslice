@@ -1,6 +1,10 @@
+"""
+This module contains the app configuration for the podcasts app.
+"""
+import logging
 import sys
 import threading
-import logging
+
 from django.apps import AppConfig
 from django.conf import settings
 
@@ -15,22 +19,24 @@ def polling_loop(shutdown_event: threading.Event, polling_interval: int):
         shutdown_event: Event to signal thread shutdown.
         polling_interval: The interval in seconds between polling runs.
     """
-    from .models import Podcast
-    from .tasks import poll_feed
+    from podcasts.models import Podcast
+    from podcasts.tasks import poll_feed
 
     while not shutdown_event.is_set():
         logger.info("Polling for new episodes...")
         for podcast in Podcast.objects.all():
             if shutdown_event.is_set():
                 break
-            logger.info(f"Checking podcast: {podcast.title}")
+            logger.info("Checking podcast: %s", podcast.title)
             try:
                 poll_feed(podcast.id)
             except Exception:
-                logger.error(f"Error polling {podcast.title}", exc_info=True)
+                logger.error("Error polling %s", podcast.title, exc_info=True)
 
         if not shutdown_event.is_set():
-            logger.info(f"Finished polling. Waiting for {polling_interval} seconds...")
+            logger.info(
+                "Finished polling. Waiting for %d seconds...", polling_interval
+            )
             shutdown_event.wait(polling_interval)
 
 
@@ -52,6 +58,10 @@ def start_polling_thread():
 
 
 class PodcastsConfig(AppConfig):
+    """
+    App configuration for the podcasts app.
+    """
+
     default_auto_field = "django.db.models.BigAutoField"
     name = "podcasts"
 
