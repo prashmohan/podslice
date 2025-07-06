@@ -37,6 +37,10 @@ DEBUG = True
 
 ALLOWED_HOSTS = ["*"]
 
+# WARNING: This allows all origins for CSRF. This is a security risk
+# and should not be used in production.
+CSRF_TRUSTED_ORIGINS_REGEXES = [r"https?://.*"]
+
 DOWNLOAD_WORKER_COUNT = 1
 
 
