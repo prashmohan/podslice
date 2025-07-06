@@ -1,18 +1,33 @@
+"""
+Tests for the podcast tasks.
+"""
 import os
 import uuid
 from unittest import mock
 import requests
+
 from django.conf import settings
 from django.test import TestCase, override_settings
 from django.utils import timezone
+
 from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.tasks import AdManager, EpisodeProcessor, FeedManager, rehost_episode_audio, delete_podcast_data
 
+
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
 class TasksClassMethodsTest(TestCase):
+    """
+    Test cases for the methods within the tasks classes.
+    """
     def setUp(self):
-        self.podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
-        self.episode = Episode.objects.create(
+        """
+        Set up test data for tasks class methods.
+        """
+        self.podcast = Podcast.objects.create( # pylint: disable=no-member
+            title="Test Podcast",
+            rss_url="http://example.com/rss"
+        )
+        self.episode = Episode.objects.create( # pylint: disable=no-member
             podcast=self.podcast,
             title="Test Episode",
             guid="12345",
@@ -26,6 +41,9 @@ class TasksClassMethodsTest(TestCase):
         self.feed_manager = FeedManager(self.podcast)
 
     def tearDown(self):
+        """
+        Clean up test media files.
+        """
         if os.path.exists(self.test_media_dir):
             for f in os.listdir(self.test_media_dir):
                 os.remove(os.path.join(self.test_media_dir, f))
@@ -33,12 +51,15 @@ class TasksClassMethodsTest(TestCase):
 
     @mock.patch('podcasts.tasks.requests.get')
     def test_download_audio_success(self, mock_requests_get):
+        """
+        Test successful audio download.
+        """
         mock_response = mock.Mock()
         mock_response.raise_for_status.return_value = None
         mock_response.iter_content.return_value = [b"chunk1", b"chunk2"]
         mock_requests_get.return_value = mock_response
 
-        audio_path = self.processor._download_audio()
+        audio_path = self.processor._download_audio() # pylint: disable=protected-access
 
         self.assertIsNotNone(audio_path)
         self.assertTrue(os.path.exists(audio_path))
@@ -49,8 +70,11 @@ class TasksClassMethodsTest(TestCase):
         os.remove(audio_path)
 
     @mock.patch('podcasts.tasks.requests.get', side_effect=requests.exceptions.RequestException("Download failed"))
-    def test_download_audio_failure(self, mock_requests_get):
-        audio_path = self.processor._download_audio()
+    def test_download_audio_failure(self, mock_requests_get): # pylint: disable=W0613
+        """
+        Test audio download failure.
+        """
+        audio_path = self.processor._download_audio() # pylint: disable=protected-access
         self.assertIsNone(audio_path)
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.FAILED)
@@ -58,24 +82,36 @@ class TasksClassMethodsTest(TestCase):
     @mock.patch('podcasts.tasks.genai.upload_file')
     @mock.patch('podcasts.tasks.genai.GenerativeModel')
     def test_get_ad_segments_from_gemini(self, mock_generative_model, mock_upload_file):
+        """
+        Test fetching ad segments from Gemini.
+        """
         mock_model_instance = mock.Mock()
-        mock_model_instance.generate_content.return_value = mock.Mock(text='[{"start": 10, "end": 20}]')
+        mock_model_instance.generate_content.return_value = mock.Mock(
+            text='[{"start": 10, "end": 20}]')
         mock_generative_model.return_value = mock_model_instance
         mock_upload_file.return_value = "fake_file_id"
 
-        response = self.ad_manager._get_ad_segments_from_gemini("dummy_path.mp3", 60.0)
+        response = self.ad_manager._get_ad_segments_from_gemini(
+            "dummy_path.mp3", 60.0
+        ) # pylint: disable=protected-access
         self.assertEqual(response, '[{"start": 10, "end": 20}]')
         mock_upload_file.assert_called_once_with(path="dummy_path.mp3")
 
     def test_parse_ad_segments_valid_json(self):
-        segments = self.ad_manager._parse_ad_segments('[{"start": 10, "end": 20}]')
+        """
+        Test parsing valid ad segments JSON.
+        """
+        segments = self.ad_manager._parse_ad_segments('[{"start": 10, "end": 20}]') # pylint: disable=protected-access
         self.assertEqual(segments, [{"start": 10, "end": 20}])
 
     @mock.patch('podcasts.tasks.EpisodeProcessor._get_audio_duration', return_value=60.0)
     @mock.patch('podcasts.tasks.EpisodeProcessor._download_audio')
-    def test_fetch_and_prepare_audio_success(self, mock_download, mock_duration):
+    def test_fetch_and_prepare_audio_success(self, mock_download, mock_duration): # pylint: disable=W0613
+        """
+        Test successful audio fetching and preparation.
+        """
         mock_download.return_value = "/fake/path.mp3"
-        result = self.processor._fetch_and_prepare_audio()
+        result = self.processor._fetch_and_prepare_audio() # pylint: disable=protected-access
         self.assertEqual(result, ("/fake/path.mp3", 60.0))
         mock_download.assert_called_once()
         mock_duration.assert_called_once_with("/fake/path.mp3")
@@ -85,14 +121,20 @@ class TasksClassMethodsTest(TestCase):
     @mock.patch('podcasts.tasks.os.remove')
     @mock.patch('podcasts.tasks.EpisodeProcessor._get_audio_duration', return_value=None)
     @mock.patch('podcasts.tasks.EpisodeProcessor._download_audio', return_value="/fake/path.mp3")
-    def test_fetch_and_prepare_audio_duration_fails(self, mock_download, mock_duration, mock_remove):
-        result = self.processor._fetch_and_prepare_audio()
+    def test_fetch_and_prepare_audio_duration_fails(self, mock_download, mock_duration, mock_remove): # pylint: disable=W0613
+        """
+        Test audio fetching and preparation when duration fails.
+        """
+        result = self.processor._fetch_and_prepare_audio() # pylint: disable=protected-access
         self.assertIsNone(result)
         mock_remove.assert_called_once_with("/fake/path.mp3")
 
     @mock.patch('podcasts.tasks.AdManager._parse_ad_segments')
     @mock.patch('podcasts.tasks.AdManager._get_ad_segments_from_gemini')
     def test_analyze_audio_with_gemini(self, mock_get_segments, mock_parse_segments):
+        """
+        Test audio analysis with Gemini.
+        """
         mock_get_segments.return_value = 'gemini-response'
         mock_parse_segments.return_value = [{"start": 1, "end": 2}]
         
@@ -107,41 +149,56 @@ class TasksClassMethodsTest(TestCase):
     @mock.patch('podcasts.tasks.EpisodeProcessor._save_processed_audio')
     @mock.patch('podcasts.tasks.EpisodeProcessor._run_ffmpeg_slicing')
     def test_slice_and_save_audio_with_segments(self, mock_run_ffmpeg, mock_save_processed):
+        """
+        Test slicing and saving audio with ad segments.
+        """
         ad_segments = [{"start": 1, "end": 2}]
         mock_run_ffmpeg.return_value = ('/path/to/file.mp3', 12345)
         
-        self.processor._slice_and_save_audio("/fake/path.mp3", ad_segments, 60.0)
+        self.processor._slice_and_save_audio("/fake/path.mp3", ad_segments, 60.0) # pylint: disable=protected-access
 
         mock_run_ffmpeg.assert_called_once_with("/fake/path.mp3", mock.ANY)
         mock_save_processed.assert_called_once_with('/path/to/file.mp3', 12345)
 
     @mock.patch('podcasts.tasks.EpisodeProcessor._save_original_audio_as_rehosted')
     def test_slice_and_save_audio_no_segments(self, mock_save_original):
-        self.processor._slice_and_save_audio("/fake/path.mp3", [], 60.0)
+        """
+        Test slicing and saving audio with no ad segments.
+        """
+        self.processor._slice_and_save_audio("/fake/path.mp3", [], 60.0) # pylint: disable=protected-access
         mock_save_original.assert_called_once_with("/fake/path.mp3")
 
     @mock.patch('podcasts.tasks.EpisodeProcessor._save_empty_audio_as_rehosted')
     @mock.patch('podcasts.tasks.EpisodeProcessor._generate_ffmpeg_filter_complex', return_value="")
-    def test_slice_and_save_audio_empty_filter(self, mock_filter, mock_save_empty):
+    def test_slice_and_save_audio_empty_filter(self, mock_filter, mock_save_empty): # pylint: disable=W0613
+        """
+        Test slicing and saving audio with an empty FFmpeg filter.
+        """
         ad_segments = [{"start": 0, "end": 60}]
-        self.processor._slice_and_save_audio("/fake/path.mp3", ad_segments, 60.0)
+        self.processor._slice_and_save_audio("/fake/path.mp3", ad_segments, 60.0) # pylint: disable=protected-access
         mock_save_empty.assert_called_once()
 
     @mock.patch('podcasts.tasks.EpisodeProcessor._save_processed_audio')
     @mock.patch('podcasts.tasks.os.rename')
     @mock.patch('podcasts.tasks.os.path.getsize')
     def test_save_original_audio_as_rehosted(self, mock_getsize, mock_rename, mock_save_processed):
+        """
+        Test saving original audio as rehosted.
+        """
         mock_getsize.return_value = 12345
-        self.processor._save_original_audio_as_rehosted("/fake/path.mp3")
+        self.processor._save_original_audio_as_rehosted("/fake/path.mp3") # pylint: disable=protected-access
         mock_rename.assert_called_once()
         mock_save_processed.assert_called_once_with(mock.ANY, 12345)
 
     @mock.patch('podcasts.tasks.subprocess.run')
     def test_run_ffmpeg_slicing(self, mock_run):
+        """
+        Test running FFmpeg slicing command.
+        """
         def side_effect(*args, **kwargs):
             cmd = args[0]
             output_path = cmd[-1]
-            with open(output_path, "w") as f:
+            with open(output_path, "w", encoding="utf-8") as f: # Added encoding
                 f.write("dummy output")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -149,10 +206,10 @@ class TasksClassMethodsTest(TestCase):
         
         with mock.patch('podcasts.tasks.os.path.getsize', return_value=54321):
             input_path = os.path.join(self.test_media_dir, "input.mp3")
-            with open(input_path, "w") as f:
+            with open(input_path, "w", encoding="utf-8") as f: # Added encoding
                 f.write("dummy input")
 
-            path, size = self.processor._run_ffmpeg_slicing(input_path, "select_filter")
+            path, size = self.processor._run_ffmpeg_slicing(input_path, "select_filter") # pylint: disable=protected-access
 
         self.assertEqual(size, 54321)
         self.assertTrue(path.endswith(".mp3"))
@@ -162,9 +219,18 @@ class TasksClassMethodsTest(TestCase):
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
 class RehostEpisodeAudioTest(TestCase):
+    """
+    Test cases for the rehost_episode_audio task.
+    """
     def setUp(self):
-        self.podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
-        self.episode = Episode.objects.create(
+        """
+        Set up test data for rehost_episode_audio task.
+        """
+        self.podcast = Podcast.objects.create( # pylint: disable=no-member
+            title="Test Podcast",
+            rss_url="http://example.com/rss"
+        )
+        self.episode = Episode.objects.create( # pylint: disable=no-member
             podcast=self.podcast,
             title="Test Episode",
             guid="12345",
@@ -175,19 +241,24 @@ class RehostEpisodeAudioTest(TestCase):
         os.makedirs(self.test_media_dir, exist_ok=True)
 
     def tearDown(self):
+        """
+        Clean up test media files.
+        """
         if os.path.exists(self.test_media_dir):
             for f in os.listdir(self.test_media_dir):
                 os.remove(os.path.join(self.test_media_dir, f))
-            os.rmdir(self.test_media_dir)
+            if os.path.exists(self.test_media_dir) and not os.listdir(self.test_media_dir):
+                os.rmdir(self.test_media_dir)
 
-    @mock.patch('podcasts.tasks.os.path.exists', return_value=True)
-    @mock.patch('podcasts.tasks.os.remove')
     @mock.patch('podcasts.tasks.EpisodeProcessor._slice_and_save_audio')
     @mock.patch('podcasts.tasks.AdManager.analyze_audio')
     @mock.patch('podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio')
     def test_rehost_episode_audio_orchestrator_success(
-        self, mock_fetch, mock_analyze, mock_slice, mock_remove, mock_exists
+        self, mock_fetch, mock_analyze, mock_slice, mock_remove, mock_exists # pylint: disable=too-many-arguments,too-many-positional-arguments,W0613
     ):
+        """
+        Test successful rehosting of episode audio.
+        """
         mock_fetch.return_value = ("/fake/path.mp3", 60.0)
         mock_analyze.return_value = [{"start": 10, "end": 20}]
 
@@ -199,7 +270,10 @@ class RehostEpisodeAudioTest(TestCase):
         mock_remove.assert_called_once_with("/fake/path.mp3")
 
     @mock.patch('podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio', return_value=None)
-    def test_rehost_episode_audio_fetch_fails(self, mock_fetch):
+    def test_rehost_episode_audio_fetch_fails(self, mock_fetch): # pylint: disable=W0613
+        """
+        Test rehosting episode audio when fetch fails.
+        """
         rehost_episode_audio(self.episode.id)
         self.episode.refresh_from_db()
         self.assertNotEqual(self.episode.status, Episode.Status.FAILED)
@@ -209,7 +283,12 @@ class RehostEpisodeAudioTest(TestCase):
     @mock.patch('podcasts.tasks.EpisodeProcessor._slice_and_save_audio', side_effect=Exception("Slicing failed"))
     @mock.patch('podcasts.tasks.AdManager.analyze_audio', return_value=[])
     @mock.patch('podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio', return_value=("/fake/path.mp3", 60.0))
-    def test_rehost_episode_audio_slice_fails(self, mock_fetch, mock_analyze, mock_slice, mock_remove, mock_exists):
+    def test_rehost_episode_audio_slice_fails(
+        self, mock_fetch, mock_analyze, mock_slice, mock_remove, mock_exists # pylint: disable=too-many-arguments,too-many-positional-arguments,W0613
+    ):
+        """
+        Test rehosting episode audio when slicing fails.
+        """
         rehost_episode_audio(self.episode.id)
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.FAILED)
@@ -218,9 +297,17 @@ class RehostEpisodeAudioTest(TestCase):
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
 class DeletePodcastDataTest(TestCase):
+    """
+    Test cases for the delete_podcast_data task.
+    """
     def setUp(self):
-        self.podcast = Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
-        self.episode = Episode.objects.create(
+        """
+        Set up test data for delete_podcast_data task.
+        """
+        self.podcast = Podcast.objects.create( # pylint: disable=no-member
+            title="Test Podcast", rss_url="http://example.com/rss"
+        )
+        self.episode = Episode.objects.create( # pylint: disable=no-member
             podcast=self.podcast,
             title="Test Episode",
             guid="12345",
@@ -232,7 +319,7 @@ class DeletePodcastDataTest(TestCase):
         os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
         with open(self.file_path, "wb") as f:
             f.write(b"test")
-        self.rehosted_media = RehostedMedia.objects.create(
+        self.rehosted_media = RehostedMedia.objects.create( # pylint: disable=no-member
             media_guid=self.media_guid,
             file_path=self.file_path,
         )
@@ -240,6 +327,9 @@ class DeletePodcastDataTest(TestCase):
         self.episode.save()
 
     def tearDown(self):
+        """
+        Clean up test media files.
+        """
         media_root = settings.MEDIA_ROOT
         if os.path.exists(media_root):
             for f in os.listdir(media_root):
@@ -248,18 +338,29 @@ class DeletePodcastDataTest(TestCase):
                 os.rmdir(media_root)
 
     def test_delete_podcast_data_success(self):
+        """
+        Test successful deletion of podcast data.
+        """
         self.assertTrue(os.path.exists(self.file_path))
         delete_podcast_data(self.podcast.id)
-        self.assertFalse(Podcast.objects.filter(id=self.podcast.id).exists())
-        self.assertFalse(Episode.objects.filter(id=self.episode.id).exists())
-        self.assertFalse(RehostedMedia.objects.filter(media_guid=self.rehosted_media.media_guid).exists())
+        self.assertFalse(Podcast.objects.filter(id=self.podcast.id).exists()) # pylint: disable=no-member
+        self.assertFalse(Episode.objects.filter(id=self.episode.id).exists()) # pylint: disable=no-member
+        self.assertFalse(RehostedMedia.objects.filter(media_guid=self.rehosted_media.media_guid).exists()) # pylint: disable=no-member
         self.assertFalse(os.path.exists(self.file_path))
 
     def test_delete_podcast_data_podcast_not_found(self):
+        """
+        Test deletion when podcast is not found.
+        """
         delete_podcast_data(uuid.uuid4())
 
     def test_delete_podcast_data_file_already_deleted(self):
+        """
+        Test deletion when file is already deleted.
+        """
         os.remove(self.file_path)
         delete_podcast_data(self.podcast.id)
-        self.assertFalse(Podcast.objects.filter(id=self.podcast.id).exists())
-        self.assertFalse(RehostedMedia.objects.filter(media_guid=self.rehosted_media.media_guid).exists())
+        self.assertFalse(Podcast.objects.filter(id=self.podcast.id).exists()) # pylint: disable=no-member
+        self.assertFalse(RehostedMedia.objects.filter(media_guid=self.rehosted_media.media_guid).exists()) # pylint: disable=no-member
+
+    
