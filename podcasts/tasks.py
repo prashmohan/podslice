@@ -59,7 +59,7 @@ Identify the precise start and end times for any of the following non-essential 
 4.  If no ads are found, return an empty array.
 5.  Only generate the JSON array and nothing other than the array.
 6.  Audio duration is {audio_duration_seconds} seconds.
-Example: [{"start": 60.5, "end": 95.0}]
+Example: [{{"start": 60.5, "end": 95.0}}]
 """
 
 
@@ -95,7 +95,7 @@ class AdManager:
             gemini_response,
         )
         match = re.search(
-            r"```json\n([.*?])\n```|([.*?])",
+            r"```json\n(.*?)?\n```|(.*)",
             gemini_response, re.DOTALL
         )
         if not match:

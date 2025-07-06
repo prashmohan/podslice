@@ -17,6 +17,9 @@ from django.urls import reverse
 from django.views import View
 from rest_framework import generics, serializers
 
+import xml.etree.ElementTree as ET
+
+from podcasts.forms import OPMLImportForm
 from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.serializers import PodcastSerializer
 from podcasts.tasks import delete_podcast_data, poll_feed, reprocess_podcast
@@ -28,6 +31,43 @@ BROWSER_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/91.0.4472.124 Safari/537.36"
 )
+
+
+class OPMLImportView(View):
+    """
+    A view to import podcast subscriptions from an OPML file.
+    """
+
+    def get(self, request):
+        """
+        Handles GET requests and returns an OPML import page.
+        """
+        form = OPMLImportForm()
+        return render(request, "podcasts/opml_import.html", {"form": form})
+
+    def post(self, request):
+        """
+        Handles POST requests and imports podcast subscriptions from an OPML file.
+        """
+        form = OPMLImportForm(request.POST, request.FILES)
+        if form.is_valid():
+            opml_file = request.FILES["opml_file"]
+            try:
+                tree = ET.parse(opml_file)
+                root = tree.getroot()
+                for outline in root.findall(".//outline[@type='rss']"):
+                    rss_url = outline.get("xmlUrl")
+                    if rss_url:
+                        try:
+                            create_podcast_from_url(rss_url)
+                        except Exception as e:
+                            logger.error(
+                                "Error creating podcast from URL %s: %s", rss_url, e
+                            )
+                return redirect("podcast-subscribe-ui")
+            except ET.ParseError as e:
+                form.add_error("opml_file", f"Invalid OPML file: {e}")
+        return render(request, "podcasts/opml_import.html", {"form": form})
 
 
 class OPMLExportView(View):
