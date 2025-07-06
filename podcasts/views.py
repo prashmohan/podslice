@@ -422,3 +422,29 @@ def serve_rehosted_media(request, media_guid):
     except FileNotFoundError as e:
         raise Http404("The media file is registered but was not found on disk.") from e
     return response
+
+
+from django.http import JsonResponse
+from django.views import View
+from podcasts.models import Episode
+
+
+class EpisodeStatusAPIView(View):
+    """
+    API view to retrieve the status of all episodes.
+    """
+
+    def get(self, request):
+        """
+        Handles GET requests and returns the number of completed and pending episodes.
+        """
+        completed_episodes = Episode.objects.filter(status=Episode.Status.COMPLETE).count()
+        pending_episodes = Episode.objects.exclude(
+            status__in=[Episode.Status.COMPLETE, Episode.Status.FAILED]
+        ).count()
+
+        data = {
+            "completed": completed_episodes,
+            "pending": pending_episodes,
+        }
+        return JsonResponse(data)
