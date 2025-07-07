@@ -6,7 +6,7 @@
     </head>
     <body>
         {% for podcast in podcasts %}
-        <outline text="{{ podcast.title }}" title="{{ podcast.title }}" type="rss" xmlUrl="{{ podcast.rehosted_rss_url }}" />
+        <outline text="{{ podcast.title }}" title="{{ podcast.title }}" type="rss" xmlUrl="{% if is_backup %}{{ podcast.rss_url }}{% else %}{{ podcast.rehosted_rss_url }}{% endif %}" />
         {% endfor %}
     </body>
 </opml>

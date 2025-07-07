@@ -113,6 +113,7 @@ class OPMLBackupView(View):
         context = {
             "podcasts": podcasts,
             "created_at": datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
+            "is_backup": True,
         }
 
         opml_content = render_to_string("podcasts/opml_export.xml", context)
