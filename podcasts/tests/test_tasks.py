@@ -346,7 +346,7 @@ class RehostEpisodeAudioTest(TestCase):
     @mock.patch("podcasts.tasks.os.remove")
     @mock.patch(
         "podcasts.tasks.EpisodeProcessor._slice_and_save_audio",
-        side_effect=Exception("Slicing failed"),
+        side_effect=ValueError("Slicing failed"),
     )
     @mock.patch("podcasts.tasks.AdManager.analyze_audio", return_value=[])
     @mock.patch(
@@ -368,7 +368,7 @@ class RehostEpisodeAudioTest(TestCase):
         mock_slice.assert_called_once()
         mock_exists.assert_called()
 
-    @mock.patch("podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio", side_effect=Exception("Random failure"))
+    @mock.patch("podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio", side_effect=ValueError("Random failure"))
     def test_rehost_episode_audio_generic_exception(self, mock_fetch):
         """
         Test rehosting episode audio with a generic exception.
