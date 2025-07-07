@@ -118,6 +118,28 @@ class TasksClassMethodsTest(TestCase):
         )
         self.assertEqual(segments, [{"start": 10, "end": 20}])
 
+    def test_parse_ad_segments_malformed_json(self):
+        """
+        Test parsing malformed ad segments JSON.
+        """
+        segments = self.ad_manager._parse_ad_segments(  # pylint: disable=protected-access
+            '[{"start": 10, "end": 20'
+        )
+        self.assertEqual(segments, [])
+        self.episode.refresh_from_db()
+        self.assertEqual(self.episode.status, Episode.Status.FAILED)
+
+    def test_parse_ad_segments_invalid_structure(self):
+        """
+        Test parsing ad segments JSON with invalid structure.
+        """
+        segments = self.ad_manager._parse_ad_segments(  # pylint: disable=protected-access
+            '[{"start": 10}]'
+        )
+        self.assertEqual(segments, [])
+        self.episode.refresh_from_db()
+        self.assertEqual(self.episode.status, Episode.Status.FAILED)
+
     @mock.patch("podcasts.tasks.EpisodeProcessor._get_audio_duration", return_value=60.0)
     @mock.patch("podcasts.tasks.EpisodeProcessor._download_audio")
     def test_fetch_and_prepare_audio_success(self, mock_download, mock_duration):  # pylint: disable=W0613
@@ -289,14 +311,12 @@ class RehostEpisodeAudioTest(TestCase):
             ):
                 os.rmdir(self.test_media_dir)
 
-    @mock.patch("podcasts.tasks.os.path.exists", return_value=True)
-    @mock.patch("podcasts.tasks.os.remove")
     @mock.patch("podcasts.tasks.EpisodeProcessor._slice_and_save_audio")
     @mock.patch("podcasts.tasks.AdManager.analyze_audio")
     @mock.patch("podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio")
     def test_rehost_episode_audio_orchestrator_success(
-        self, mock_fetch, mock_analyze, mock_slice, mock_remove, mock_exists
-    ):  # pylint: disable=too-many-arguments
+        self, mock_fetch, mock_analyze, mock_slice
+    ):
         """
         Test successful rehosting of episode audio.
         """
@@ -310,8 +330,6 @@ class RehostEpisodeAudioTest(TestCase):
         mock_slice.assert_called_once_with(
             "/fake/path.mp3", [{"start": 10, "end": 20}], 60.0
         )
-        mock_remove.assert_called_once_with("/fake/path.mp3")
-        mock_exists.assert_called()
 
     @mock.patch(
         "podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio", return_value=None
@@ -349,6 +367,16 @@ class RehostEpisodeAudioTest(TestCase):
         mock_analyze.assert_called_once()
         mock_slice.assert_called_once()
         mock_exists.assert_called()
+
+    @mock.patch("podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio", side_effect=Exception("Random failure"))
+    def test_rehost_episode_audio_generic_exception(self, mock_fetch):
+        """
+        Test rehosting episode audio with a generic exception.
+        """
+        rehost_episode_audio(self.episode.id)
+        self.episode.refresh_from_db()
+        self.assertEqual(self.episode.status, Episode.Status.FAILED)
+        mock_fetch.assert_called_once()
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))

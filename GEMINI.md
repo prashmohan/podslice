@@ -2,9 +2,7 @@ This document provides guidance for agents interacting with the Podslice codebas
 
 ## Project Overview
 
-Podslice is a Django-based application designed to download podcast episodes, slice them into smaller audio segments, and rehost them. It is composed of two main Django projects:
-
--   `podslice_core`: Handles the core logic of fetching podcast feeds, processing episodes, and managing the slicing tasks.
+Podslice is a Django-based application designed to download podcast episodes, slice them into smaller audio segments, and rehost them. It is composed of a main Django project that handles the core logic of fetching podcast feeds, processing episodes, and managing the slicing tasks.
 
 ## Agent Persona & Tone
 
@@ -38,17 +36,15 @@ To run the main application, you will need to start the Django development serve
 
 1.  **Start the Django Server:**
     ```bash
-    python podslice_core/manage.py runserver
+    python manage.py runserver
     ```
 
 ### Creating New Migrations
 
 When you change a model, you will need to create a new database migration.
 
-For `podslice_core`:
-
 ```bash
-python podslice_core/manage.py makemigrations
+python manage.py makemigrations
 ```
 
 
@@ -57,10 +53,8 @@ python podslice_core/manage.py makemigrations
 
 To apply database migrations, run the `migrate` command for each application.
 
-For `podslice_core`:
-
 ```bash
-python podslice_core/manage.py migrate
+python manage.py migrate
 ```
 
 ### Running Tests
@@ -68,7 +62,7 @@ python podslice_core/manage.py migrate
 To run the tests for the `podcasts` app, run the following command:
 
 ```bash
-python podslice_core/manage.py test podcasts
+python manage.py test podcasts
 ```
 
 

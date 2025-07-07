@@ -61,6 +61,10 @@
                                 <a href="{{ episode.original_audio_url }}" target="_blank">Original Audio</a>
                                 | Removed: {{ episode.removed_duration_str }}
                             </small>
+                            <form action="{% url 'episode-reprocess' episode.id %}" method="post" class="d-inline ms-2">
+                                {% csrf_token %}
+                                <button type="submit" class="btn btn-sm btn-warning">Reprocess</button>
+                            </form>
                         </div>
                         {% if episode.rehosted_media_id %}
                             <audio controls preload="none" class="mt-2" style="width: 100%;">

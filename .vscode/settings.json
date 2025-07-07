@@ -2,7 +2,7 @@
     "python.testing.unittestArgs": [
         "-v",
         "-s",
-        "./podslice_core",
+        ".",
         "-p",
         "*test*.py"
     ],

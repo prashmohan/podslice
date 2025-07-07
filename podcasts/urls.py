@@ -15,7 +15,8 @@ from podcasts.views import (
     OPMLExportView,
     OPMLImportView,
     EpisodeStatusAPIView,
-    OPMLBackupView
+    OPMLBackupView,
+    EpisodeReprocessView,
 )
 
 urlpatterns = [
@@ -46,6 +47,9 @@ urlpatterns = [
     path('status/<uuid:podcast_id>/reprocess/',
          PodcastReprocessView.as_view(),
          name='podcast-reprocess'),
+    path('episodes/<int:episode_id>/reprocess/',
+            EpisodeReprocessView.as_view(),
+            name='episode-reprocess'),
     path('media/episodes/<uuid:media_guid>/',
          serve_rehosted_media,
          name='serve_media_episode'),

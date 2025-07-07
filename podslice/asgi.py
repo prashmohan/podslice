@@ -1,5 +1,5 @@
 """
-ASGI config for podslice_core project.
+ASGI config for podslice project.
 
 It exposes the ASGI callable as a module-level variable named ``application``.
 

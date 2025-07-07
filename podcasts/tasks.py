@@ -123,6 +123,8 @@ class AdManager:
                 self.episode.id,
                 json_string,
             )
+            self.episode.status = Episode.Status.FAILED
+            self.episode.save(update_fields=["status"])
             return []
 
     def analyze_audio(
@@ -782,7 +784,7 @@ class FeedManager:
         )
 
 
-def rehost_episode_audio(episode_id: uuid.UUID):
+def rehost_episode_audio(episode_id: int):
     """Task to re-host the audio for a single episode."""
     try:
         episode = Episode.objects.select_related("podcast").get(id=episode_id)

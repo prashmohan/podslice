@@ -2,6 +2,7 @@
 Tests for the podcast views.
 """
 import os
+import uuid
 from unittest import mock
 
 from django.conf import settings
@@ -11,7 +12,8 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from podcasts.models import Podcast
+from django.utils import timezone
+from podcasts.models import Episode, Podcast
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
@@ -76,3 +78,22 @@ class PodcastViewsTest(TestCase):
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         mock_thread.assert_called_once()
         self.assertTrue(Podcast.objects.filter(id=self.podcast.id).exists()) # pylint: disable=no-member
+
+    @mock.patch('podcasts.views.rehost_episode_audio')
+    def test_episode_reprocess_view(self, mock_rehost_episode_audio):
+        """
+        Test reprocessing a single episode.
+        """
+        episode = self.podcast.episodes.create(
+            title="Test Episode",
+            guid="12345",
+            original_audio_url="http://example.com/episode.mp3",
+            status=Episode.Status.FAILED,
+            pub_date=timezone.now(),
+        )
+        url = reverse('episode-reprocess', kwargs={'episode_id': episode.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.NEW)
+        mock_rehost_episode_audio.assert_called_once_with(episode.id)

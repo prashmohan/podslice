@@ -1,5 +1,5 @@
 """
-WSGI config for podslice_core project.
+WSGI config for podslice project.
 
 It exposes the WSGI callable as a module-level variable named ``application``.
 

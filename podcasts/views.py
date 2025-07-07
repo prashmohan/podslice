@@ -23,7 +23,38 @@ import xml.etree.ElementTree as ET
 from podcasts.forms import OPMLImportForm
 from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.serializers import PodcastSerializer
-from podcasts.tasks import delete_podcast_data, poll_feed, reprocess_podcast
+from podcasts.tasks import delete_podcast_data, poll_feed, reprocess_podcast, rehost_episode_audio
+
+class EpisodeReprocessView(View):
+    """
+    A view to reprocess a single episode.
+    """
+
+    def post(self, request, episode_id):
+        """
+        Handles POST requests and reprocesses a single episode.
+        """
+        episode = get_object_or_404(Episode, id=episode_id)
+        if episode.rehosted_media_id:
+            try:
+                media_item = RehostedMedia.objects.get(pk=episode.rehosted_media_id)
+                if os.path.exists(media_item.file_path):
+                    os.remove(media_item.file_path)
+                media_item.delete()
+            except RehostedMedia.DoesNotExist:
+                pass
+        episode.status = Episode.Status.NEW
+        episode.rehosted_media_id = None
+        episode.rehosted_audio_url = None
+        episode.rehosted_audio_size = 0
+        episode.ad_segments = None
+        episode.save()
+        reprocess_thread = threading.Thread(
+            target=rehost_episode_audio, args=(episode.id,)
+        )
+        reprocess_thread.start()
+        return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": episode.podcast.id}))
+
 
 logger = logging.getLogger(__name__)
 
