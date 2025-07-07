@@ -443,8 +443,8 @@ def serve_rehosted_media(request, media_guid):
 
     logger.info("Serving file %s for GUID %s", media_item.file_path, media_guid)
     try:
-        with open(media_item.file_path, "rb") as f:
-            response = FileResponse(f, content_type=media_item.content_type)
+        # The FileResponse will take care of closing the file
+        response = FileResponse(open(media_item.file_path, "rb"), content_type=media_item.content_type)
     except FileNotFoundError as e:
         raise Http404("The media file is registered but was not found on disk.") from e
     return response
