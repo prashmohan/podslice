@@ -225,7 +225,8 @@ class EpisodeProcessor:
                 self.episode.original_audio_url,
             )
             response = requests.get(
-                self.episode.original_audio_url, stream=True, timeout=60
+                self.episode.original_audio_url, stream=True, 
+                timeout=settings.DOWNLOAD_TIMEOUT_SEC
             )
             response.raise_for_status()
 
@@ -363,7 +364,8 @@ class EpisodeProcessor:
         )
         try:
             subprocess.run(
-                ffmpeg_cmd, check=True, capture_output=True, text=True, timeout=300
+                ffmpeg_cmd, check=True, capture_output=True, text=True, 
+                timeout=settings.AD_SPLICING_TIMEOUT_SEC
             )
             file_size = os.path.getsize(final_audio_path)
             return final_audio_path, file_size
