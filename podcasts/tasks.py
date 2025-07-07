@@ -33,7 +33,7 @@ BROWSER_USER_AGENT = getattr(
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/91.0.4472.124 Safari/537.36",
 )
-GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-2.5-pro")
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=settings.DOWNLOAD_WORKER_COUNT)
 EPISODES_PER_FEED = getattr(settings, "EPISODES_PER_FEED", 5)
 EPISODE_LIMIT = getattr(settings, "EPISODE_LIMIT", 5)

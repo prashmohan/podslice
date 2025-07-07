@@ -153,6 +153,7 @@ REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://192.168.68.83:12341"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
+GEMINI_MODEL = "gemini-2.5-pro"
 
 
 LOGGING = {
