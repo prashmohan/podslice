@@ -6,24 +6,28 @@ import json
 import logging
 import os
 import threading
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
 import feedparser
 from django.conf import settings
 from django.db import transaction
-from django.http import FileResponse, Http404, HttpResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.views import View
 from rest_framework import generics, serializers
 
-import xml.etree.ElementTree as ET
-
 from podcasts.forms import OPMLImportForm
 from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.serializers import PodcastSerializer
-from podcasts.tasks import delete_podcast_data, poll_feed, reprocess_podcast, rehost_episode_audio
+from podcasts.tasks import (
+    delete_podcast_data,
+    poll_feed,
+    rehost_episode_audio,
+    reprocess_podcast,
+)
 
 class EpisodeReprocessView(View):
     """

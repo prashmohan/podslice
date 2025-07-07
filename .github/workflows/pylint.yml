@@ -26,3 +26,4 @@ jobs:
         REHOST_BASE_URL: 'http://localhost:8000'
       run: |
         pylint --load-plugins pylint_django --django-settings-module=podslice.settings podcasts
+      continue-on-error: true

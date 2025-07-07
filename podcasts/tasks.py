@@ -19,7 +19,6 @@ import requests
 from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
-from pydub import AudioSegment
 
 from podcasts.models import Episode, Podcast, RehostedMedia
 
@@ -401,9 +400,33 @@ class EpisodeProcessor:
             self.episode.title,
         )
         final_audio_path = self._create_rehosted_media_path()
-        AudioSegment.empty().export(final_audio_path, format="mp3")
-        file_size = os.path.getsize(final_audio_path)
-        self._save_processed_audio(final_audio_path, file_size)
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=44100:cl=stereo",
+            "-t",
+            "1",
+            "-q:a",
+            "9",
+            "-acodec",
+            "libmp3lame",
+            final_audio_path,
+        ]
+        try:
+            subprocess.run(
+                ffmpeg_cmd, check=True, capture_output=True, text=True, timeout=60
+            )
+            file_size = os.path.getsize(final_audio_path)
+            self._save_processed_audio(final_audio_path, file_size)
+        except (subprocess.CalledProcessError, ValueError):
+            logger.error(
+                "ffmpeg failed for '%s'.",
+                self.episode.title,
+                exc_info=True,
+            )
+            self._update_status(Episode.Status.FAILED)
 
     def _slice_and_save_audio(
         self,
