@@ -30,7 +30,7 @@ def polling_loop(shutdown_event: threading.Event, polling_interval: int):
             logger.info("Checking podcast: %s", podcast.title)
             try:
                 poll_feed(podcast.id)
-            except Exception:
+            except Podcast.DoesNotExist:
                 logger.error("Error polling %s", podcast.title, exc_info=True)
 
         if not shutdown_event.is_set():
