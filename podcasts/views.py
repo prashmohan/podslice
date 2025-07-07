@@ -99,6 +99,31 @@ class OPMLExportView(View):
         return response
 
 
+class OPMLBackupView(View):
+    """
+    A view to export all podcast subscriptions as an OPML file with the original RSS URLs.
+    """
+
+    def get(self, request):
+        """
+        Handles GET requests and returns an OPML file.
+        """
+        podcasts = Podcast.objects.all()
+
+        context = {
+            "podcasts": podcasts,
+            "created_at": datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
+        }
+
+        opml_content = render_to_string("podcasts/opml_export.xml", context)
+
+        response = HttpResponse(opml_content, content_type="application/xml")
+        response["Content-Disposition"] = (
+            'attachment; filename="podslice_backup.opml"'
+        )
+        return response
+
+
 def create_podcast_from_url(rss_url: str) -> Podcast:
     """
     Parses an RSS feed, creates a Podcast object, and dispatches a background task.

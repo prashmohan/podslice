@@ -14,7 +14,8 @@ from podcasts.views import (
     serve_rehosted_media,
     OPMLExportView,
     OPMLImportView,
-    EpisodeStatusAPIView
+    EpisodeStatusAPIView,
+    OPMLBackupView
 )
 
 urlpatterns = [
@@ -52,6 +53,9 @@ urlpatterns = [
          OPMLExportView.as_view(),
          name='opml-export'),
     path('opml/import/',
-            OPMLImportView.as_view(),
-            name='opml-import'),
+         OPMLImportView.as_view(),
+         name='opml-import'),
+    path('opml/backup/',
+         OPMLBackupView.as_view(),
+         name='opml-backup'),
 ]
