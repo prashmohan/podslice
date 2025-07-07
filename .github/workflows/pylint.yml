@@ -20,5 +20,9 @@ jobs:
         pip install -r requirements.txt
         pip install pylint pylint-django
     - name: Analysing the code with pylint
+      env:
+        DJANGO_SECRET_KEY: 'a-dummy-secret-key-for-testing'
+        GEMINI_API_KEY: 'a-dummy-gemini-key-for-testing'
+        REHOST_BASE_URL: 'http://localhost:8000'
       run: |
         pylint --load-plugins pylint_django --django-settings-module=podslice.settings podcasts
