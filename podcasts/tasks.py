@@ -355,8 +355,12 @@ class EpisodeProcessor:
             "[out]",
             "-c:a",
             "libmp3lame",
+            "-b:a",
+            "0",
             "-q:a",
-            "2",
+            "4",
+            "-write_xing",
+            "1",
             final_audio_path,
         ]
         logger.info(
