@@ -37,9 +37,9 @@ class Command(BaseCommand):
                     f"Successfully marked episode '{title}' for reanalysis."
                 )
             )
-        except Episode.DoesNotExist:
-            raise CommandError(f"Episode with title '{title}' does not exist.")
-        except Episode.MultipleObjectsReturned:
+        except Episode.DoesNotExist as e:
+            raise CommandError(f"Episode with title '{title}' does not exist.") from e
+        except Episode.MultipleObjectsReturned as e:
             raise CommandError(
                 f"Multiple episodes found with title '{title}'. Please use a more specific identifier."
-            )
+            ) from e

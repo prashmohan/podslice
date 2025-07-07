@@ -81,7 +81,7 @@ class AdManager:
             prompt = GEMINI_PROMPT.format(audio_duration_seconds=audio_duration_seconds)
             response = model.generate_content([prompt, audio_file])
             return response.text
-        except Exception:
+        except (ValueError, IOError) as _:
             logger.error("Gemini API call failed", exc_info=True)
             return "[]"
 
@@ -186,14 +186,14 @@ class EpisodeProcessor:
                 self.episode.title,
                 media_entry.media_guid,
             )
-        except Exception as e:
+        except (ValueError, IOError) as _:
             logger.error(
                 "Failed to create RehostedMedia record for '%s'",
                 self.episode.title,
                 exc_info=True,
             )
             os.remove(final_audio_path)
-            raise e
+            raise
 
         relative_url = reverse(
             "serve_media_episode", kwargs={"media_guid": media_entry.media_guid}
@@ -226,7 +226,7 @@ class EpisodeProcessor:
                 self.episode.original_audio_url,
             )
             response = requests.get(
-                self.episode.original_audio_url, stream=True, 
+                self.episode.original_audio_url, stream=True,
                 timeout=settings.DOWNLOAD_TIMEOUT_SEC
             )
             response.raise_for_status()
@@ -369,7 +369,7 @@ class EpisodeProcessor:
         )
         try:
             subprocess.run(
-                ffmpeg_cmd, check=True, capture_output=True, text=True, 
+                ffmpeg_cmd, check=True, capture_output=True, text=True,
                 timeout=settings.AD_SPLICING_TIMEOUT_SEC
             )
             file_size = os.path.getsize(final_audio_path)
@@ -378,7 +378,7 @@ class EpisodeProcessor:
             logger.error(
                 "ffmpeg failed for '%s'. Stderr: %s", self.episode.title, e.stderr
             )
-            raise Exception(
+            raise ValueError(
                 f"ffmpeg processing failed for episode {self.episode.id}"
             ) from e
 
@@ -500,7 +500,7 @@ class EpisodeProcessor:
                 audio_path, ad_segments_list, audio_duration_seconds
             )
 
-        except Exception:
+        except (ValueError, IOError):
             logger.error(
                 "An unexpected error occurred during rehosting of '%s'",
                 self.episode.title,
@@ -582,7 +582,7 @@ class FeedManager:
                 )
                 return None
             return feed
-        except Exception:
+        except (ValueError, IOError) as _:
             logger.error(
                 "Failed to fetch or parse feed for '%s'",
                 self.podcast.title,
@@ -646,7 +646,7 @@ class FeedManager:
                 },
             )
             return episode, created
-        except Exception:
+        except (ValueError, IOError) as _:
             logger.error(
                 "Failed to create episode with GUID %s for podcast '%s'.",
                 guid,
@@ -711,7 +711,7 @@ class FeedManager:
                     episode.title,
                     episode.rehosted_media_id,
                 )
-            except Exception:
+            except (ValueError, IOError) as _:
                 logger.error(
                     "Error deleting media for episode '%s'",
                     episode.title,
@@ -853,7 +853,7 @@ def delete_podcast_data(podcast_id: uuid.UUID):
         logger.error(
             "Podcast with ID %s not found. Aborting deletion task.", podcast_id
         )
-    except Exception:
+    except (ValueError, IOError) as _:
         logger.error(
             "An error occurred during podcast deletion for ID %s",
             podcast_id,

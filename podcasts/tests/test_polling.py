@@ -43,9 +43,14 @@ class PollingThreadTest(TestCase):
     @mock.patch("podcasts.apps.threading.Thread")
     def test_start_polling_thread(self, mock_thread):
         """Test that the polling thread can be started."""
+        mock_thread_instance = mock.Mock()
+        mock_thread.return_value = mock_thread_instance
+
         thread, _ = start_polling_thread()
+
         mock_thread.assert_called_once()
-        thread.start.assert_called_once()
+        self.assertEqual(thread, mock_thread_instance)
+        mock_thread_instance.start.assert_called_once()
 
     @mock.patch("podcasts.tasks.DOWNLOAD_POOL.submit")
     @mock.patch("podcasts.tasks.feedparser")

@@ -2,7 +2,6 @@
 Tests for the podcast views.
 """
 import os
-import uuid
 from unittest import mock
 
 from django.conf import settings

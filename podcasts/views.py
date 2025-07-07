@@ -96,7 +96,7 @@ class OPMLImportView(View):
                     if rss_url:
                         try:
                             create_podcast_from_url(rss_url)
-                        except Exception as e:
+                        except (ValueError, IOError) as e:
                             logger.error(
                                 "Error creating podcast from URL %s: %s", rss_url, e
                             )
@@ -223,7 +223,7 @@ def create_podcast_from_url(rss_url: str) -> Podcast:
             rss_url,
             exc_info=True,
         )
-        raise e
+        raise ValueError("An unexpected error occurred during podcast subscription.") from e
 
 
 class PodcastSubscribeUIView(View):
@@ -256,7 +256,7 @@ class PodcastSubscribeUIView(View):
             return redirect(
                 reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id})
             )
-        except Exception as e:
+        except (ValueError, IOError) as e:
             podcasts = Podcast.objects.all()
             return render(
                 request,
@@ -369,10 +369,6 @@ class PodcastSubscriptionAPIView(generics.ListCreateAPIView):
             raise serializers.ValidationError(
                 {"rss_url": [f"Could not fetch or parse the feed. Reason: {e}"]}
             ) from e
-        except Exception as e:
-            raise serializers.ValidationError(
-                {"non_field_errors": [f"An unexpected server error occurred: {e}"]}
-            ) from e
 
 
 class PodcastRSSFeedView(generics.RetrieveAPIView):
@@ -483,13 +479,8 @@ def serve_rehosted_media(request, media_guid):
             buffer = io.BytesIO(f.read())
         response = FileResponse(buffer, content_type=media_item.content_type)
     except FileNotFoundError as e:
-        raise Http44("The media file is registered but was not found on disk.") from e
+        raise Http404("The media file is registered but was not found on disk.") from e
     return response
-
-
-from django.http import JsonResponse
-from django.views import View
-from podcasts.models import Episode
 
 
 class EpisodeStatusAPIView(View):

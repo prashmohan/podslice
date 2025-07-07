@@ -11,7 +11,7 @@ class RehostRouter:
 
     route_app_labels = {"rehost_app"}
 
-    def db_for_read(self, model, **hints):
+    def db_for_read(self, model, **_):
         """
         Attempts to read rehost_app models go to rehost_db.
         """
@@ -19,7 +19,7 @@ class RehostRouter:
             return "rehost_db"
         return None
 
-    def db_for_write(self, model, **hints):
+    def db_for_write(self, model, **_):
         """
         Attempts to write rehost_app models go to rehost_db.
         """
@@ -27,7 +27,7 @@ class RehostRouter:
             return "rehost_db"
         return None
 
-    def allow_relation(self, obj1, obj2, **hints):
+    def allow_relation(self, obj1, obj2, **_):
         """
         Allow relations if a model in the rehost_app is involved.
         """
@@ -38,7 +38,7 @@ class RehostRouter:
             return True
         return None
 
-    def allow_migrate(self, db, app_label, model_name=None, **_hints):
+    def allow_migrate(self, db, app_label, **_hints):
         """
         Make sure the rehost_app only appears in the 'rehost_db' database.
         """
