@@ -1,6 +1,7 @@
 """
 Views for the podcasts app.
 """
+import io
 import json
 import logging
 import os
@@ -443,10 +444,11 @@ def serve_rehosted_media(request, media_guid):
 
     logger.info("Serving file %s for GUID %s", media_item.file_path, media_guid)
     try:
-        # The FileResponse will take care of closing the file
-        response = FileResponse(open(media_item.file_path, "rb"), content_type=media_item.content_type)
+        with open(media_item.file_path, "rb") as f:
+            buffer = io.BytesIO(f.read())
+        response = FileResponse(buffer, content_type=media_item.content_type)
     except FileNotFoundError as e:
-        raise Http404("The media file is registered but was not found on disk.") from e
+        raise Http44("The media file is registered but was not found on disk.") from e
     return response
 
 
