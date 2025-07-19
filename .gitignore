@@ -131,3 +131,4 @@ site/ # if using mkdocs or similar
 *.temp
 
 *.mp3
+.env
