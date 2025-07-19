@@ -1,9 +1,40 @@
 """
 Tests for the models in the podcasts app.
 """
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from podcasts.models import Episode, Podcast, RehostedMedia
+from django.urls import reverse
+import uuid
 
-from podcasts.models import Podcast, RehostedMedia
+@override_settings(REHOST_BASE_URL="http://localhost:12343")
+
+class EpisodeModelTest(TestCase):
+    """Tests for the Episode model."""
+
+    def setUp(self):
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast",
+            rss_url="http://example.com/feed.xml",
+        )
+
+    def test_rehosted_audio_url_property(self):
+        """Test the rehosted_audio_url property."""
+        episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Test Episode",
+            guid="12345",
+            original_audio_url="http://example.com/episode.mp3",
+            pub_date="2025-07-20T12:00:00Z",
+        )
+        self.assertIsNone(episode.rehosted_audio_url)
+
+        media_guid = uuid.uuid4()
+        episode.rehosted_media_id = media_guid
+        episode.save()
+
+        expected_url = f"http://localhost:12343{reverse('serve_media_episode', kwargs={'media_guid': media_guid})}"
+        self.assertEqual(episode.rehosted_audio_url, expected_url)
+
 
 
 class PodcastModelTest(TestCase):

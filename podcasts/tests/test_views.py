@@ -15,6 +15,54 @@ from django.utils import timezone
 from podcasts.models import Episode, Podcast
 
 
+@override_settings(REHOST_BASE_URL="http://localhost:12343")
+class PodcastURLGenerationTest(TestCase):
+    """
+    Test cases for URL generation in views.
+    """
+    def setUp(self):
+        """
+        Set up test data.
+        """
+        self.podcast = Podcast.objects.create(
+            title="Test Podcast", rss_url="http://example.com/feed.xml"
+        )
+
+    def test_opml_export_view(self):
+        """
+        Test that the OPMLExportView generates the correct rehosted_rss_url.
+        """
+        url = reverse('opml-export')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        
+        expected_url = f"http://localhost:12343{reverse('podcast-rss-feed-api', args=[self.podcast.id])}"
+        self.assertContains(response, f'xmlUrl="{expected_url}"')
+
+    def test_podcast_rss_feed_view(self):
+        """
+        Test that the PodcastRSSFeedView generates the correct rehosted_rss_url in the context.
+        """
+        url = reverse('podcast-rss-feed-api', kwargs={'podcast_id': self.podcast.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        
+        expected_url = f"http://localhost:12343{reverse('podcast-rss-feed-api', args=[self.podcast.id])}"
+        self.assertContains(response, f'<atom:link href="{expected_url}"')
+
+    def test_podcast_status_ui_view(self):
+        """
+        Test that the PodcastStatusUIView generates the correct rehosted_rss_url in the context.
+        """
+        url = reverse('podcast-status-ui', kwargs={'podcast_id': self.podcast.id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        
+        expected_url = f"http://localhost:12343{reverse('podcast-rss-feed-api', args=[self.podcast.id])}"
+        self.assertContains(response, f'<a href="{expected_url}" target="_blank"')
+
+
+
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
 class PodcastViewsTest(TestCase):
     """

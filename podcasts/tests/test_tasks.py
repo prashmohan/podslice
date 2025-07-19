@@ -195,14 +195,14 @@ class TasksClassMethodsTest(TestCase):
         Test slicing and saving audio with ad segments.
         """
         ad_segments = [{"start": 1, "end": 2}]
-        mock_run_ffmpeg.return_value = ("/path/to/file.mp3", 12345)
+        mock_run_ffmpeg.return_value = 12345
 
         self.processor._slice_and_save_audio(  # pylint: disable=protected-access
             "/fake/path.mp3", ad_segments, 60.0
         )
 
-        mock_run_ffmpeg.assert_called_once_with("/fake/path.mp3", mock.ANY)
-        mock_save_processed.assert_called_once_with("/path/to/file.mp3", 12345)
+        mock_run_ffmpeg.assert_called_once_with("/fake/path.mp3", mock.ANY, mock.ANY)
+        mock_save_processed.assert_called_once_with(mock.ANY, mock.ANY, 12345)
 
     @mock.patch("podcasts.tasks.EpisodeProcessor._save_original_audio_as_rehosted")
     def test_slice_and_save_audio_no_segments(self, mock_save_original):
@@ -244,7 +244,7 @@ class TasksClassMethodsTest(TestCase):
             "/fake/path.mp3"
         )
         mock_rename.assert_called_once()
-        mock_save_processed.assert_called_once_with(mock.ANY, 12345)
+        mock_save_processed.assert_called_once_with(mock.ANY, mock.ANY, 12345)
 
     @mock.patch("podcasts.tasks.subprocess.run")
     def test_run_ffmpeg_slicing(self, mock_run):
@@ -263,17 +263,17 @@ class TasksClassMethodsTest(TestCase):
 
         with mock.patch("podcasts.tasks.os.path.getsize", return_value=54321):
             input_path = os.path.join(self.test_media_dir, "input.mp3")
+            output_path = os.path.join(self.test_media_dir, "output.mp3")
             with open(input_path, "w", encoding="utf-8") as f:
                 f.write("dummy input")
 
-            path, size = self.processor._run_ffmpeg_slicing(  # pylint: disable=protected-access
-                input_path, "select_filter"
+            size = self.processor._run_ffmpeg_slicing(  # pylint: disable=protected-access
+                input_path, "select_filter", output_path
             )
 
         self.assertEqual(size, 54321)
-        self.assertTrue(path.endswith(".mp3"))
-        self.assertTrue(os.path.exists(path))
-        os.remove(path)
+        self.assertTrue(os.path.exists(output_path))
+        os.remove(output_path)
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
