@@ -106,7 +106,7 @@ WSGI_APPLICATION = "podslice.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "podslice" / "db.sqlite3",
+        "NAME": BASE_DIR / "db/db.sqlite3",
     },
 }
 
@@ -175,6 +175,8 @@ if not GEMINI_MODEL:
     raise ImproperlyConfigured("GEMINI_MODEL environment variable not set.")
 
 
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -192,6 +194,6 @@ LOGGING = {
     },
     "root": {
         "handlers": ["console"],
-        "level": "DEBUG",  # You can set this to 'DEBUG' for even more verbosity
+        "level": LOG_LEVEL,
     },
 }

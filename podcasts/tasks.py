@@ -171,13 +171,13 @@ class EpisodeProcessor:
         return os.path.join(media_dir, final_audio_filename)
 
     def _save_processed_audio(
-        self, final_audio_path: str, file_size: int, output_mime_type: str = "audio/mpeg"
+        self, media_guid: uuid.UUID, final_audio_path: str, file_size: int, output_mime_type: str = "audio/mpeg"
     ):
         """Creates a RehostedMedia record and updates the episode with the new URL."""
         logger.debug("Creating RehostedMedia entry in the database.")
         try:
             media_entry = RehostedMedia.objects.create(
-                media_guid=uuid.uuid4(),
+                media_guid=media_guid,
                 file_path=final_audio_path,
                 content_type=output_mime_type,
             )
@@ -344,10 +344,9 @@ class EpisodeProcessor:
         return "; ".join(filter_parts) + "; " + concat_filter
 
     def _run_ffmpeg_slicing(
-        self, audio_path: str, filter_complex: str
-    ) -> Tuple[str, int]:
+        self, audio_path: str, filter_complex: str, final_audio_path: str
+    ) -> int:
         """Runs the ffmpeg command to slice the audio."""
-        final_audio_path = self._create_rehosted_media_path()
         ffmpeg_cmd = [
             "ffmpeg",
             "-i",
@@ -377,7 +376,7 @@ class EpisodeProcessor:
                 timeout=settings.AD_SPLICING_TIMEOUT_SEC
             )
             file_size = os.path.getsize(final_audio_path)
-            return final_audio_path, file_size
+            return file_size
         except subprocess.CalledProcessError as e:
             logger.error(
                 "ffmpeg failed for '%s'. Stderr: %s", self.episode.title, e.stderr
@@ -392,10 +391,12 @@ class EpisodeProcessor:
             "No ad segments to slice for '%s'. Saving original audio.",
             self.episode.title,
         )
-        final_audio_path = self._create_rehosted_media_path()
+        media_guid = uuid.uuid4()
+        media_dir = settings.MEDIA_ROOT
+        final_audio_path = os.path.join(media_dir, f"{media_guid}.mp3")
         os.rename(audio_path, final_audio_path)
         file_size = os.path.getsize(final_audio_path)
-        self._save_processed_audio(final_audio_path, file_size)
+        self._save_processed_audio(media_guid, final_audio_path, file_size)
 
     def _save_empty_audio_as_rehosted(self):
         """Saves an empty audio file if ads cover the entire duration."""
@@ -403,7 +404,9 @@ class EpisodeProcessor:
             "Ad segments covered the entire audio for '%s'. Result will be an empty file.",
             self.episode.title,
         )
-        final_audio_path = self._create_rehosted_media_path()
+        media_guid = uuid.uuid4()
+        media_dir = settings.MEDIA_ROOT
+        final_audio_path = os.path.join(media_dir, f"{media_guid}.mp3")
         ffmpeg_cmd = [
             "ffmpeg",
             "-f",
@@ -423,7 +426,7 @@ class EpisodeProcessor:
                 ffmpeg_cmd, check=True, capture_output=True, text=True, timeout=60
             )
             file_size = os.path.getsize(final_audio_path)
-            self._save_processed_audio(final_audio_path, file_size)
+            self._save_processed_audio(media_guid, final_audio_path, file_size)
         except (subprocess.CalledProcessError, ValueError):
             logger.error(
                 "ffmpeg failed for '%s'.",
@@ -463,10 +466,13 @@ class EpisodeProcessor:
                 self.episode.title,
                 filter_complex,
             )
-            final_audio_path, file_size = self._run_ffmpeg_slicing(
-                audio_path, filter_complex
+            media_guid = uuid.uuid4()
+            media_dir = settings.MEDIA_ROOT
+            final_audio_path = os.path.join(media_dir, f"{media_guid}.mp3")
+            file_size = self._run_ffmpeg_slicing(
+                audio_path, filter_complex, final_audio_path
             )
-            self._save_processed_audio(final_audio_path, file_size)
+            self._save_processed_audio(media_guid, final_audio_path, file_size)
 
     def rehost_audio(self):
         """Main method to process and re-host the audio for an episode."""
