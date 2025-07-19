@@ -195,19 +195,12 @@ class EpisodeProcessor:
             os.remove(final_audio_path)
             raise
 
-        relative_url = reverse(
-            "serve_media_episode", kwargs={"media_guid": media_entry.media_guid}
-        )
-        rehosted_audio_url = f"{settings.REHOST_BASE_URL}{relative_url}"
-
-        self.episode.rehosted_audio_url = rehosted_audio_url
         self.episode.rehosted_audio_size = file_size
         self.episode.rehosted_media_id = media_entry.media_guid
         self._update_status(Episode.Status.COMPLETE, save=False)
 
         Episode.objects.filter(id=self.episode.id).update(
             status=Episode.Status.COMPLETE,
-            rehosted_audio_url=rehosted_audio_url,
             rehosted_audio_size=file_size,
             rehosted_media_id=media_entry.media_guid,
         )
@@ -805,7 +798,6 @@ class FeedManager:
             self._delete_episode_media(episode)
             episode.status = Episode.Status.NEW
             episode.rehosted_media_id = None
-            episode.rehosted_audio_url = None
             episode.rehosted_audio_size = 0
             episode.ad_segments = None
             episode.save()

@@ -49,7 +49,6 @@ class EpisodeReprocessView(View):
                 pass
         episode.status = Episode.Status.NEW
         episode.rehosted_media_id = None
-        episode.rehosted_audio_url = None
         episode.rehosted_audio_size = 0
         episode.ad_segments = None
         episode.save()
@@ -117,9 +116,7 @@ class OPMLExportView(View):
         """
         podcasts = Podcast.objects.all()
         for podcast in podcasts:
-            podcast.rehosted_rss_url = request.build_absolute_uri(
-                reverse("podcast-rss-feed-api", args=[podcast.id])
-            )
+            podcast.rehosted_rss_url = f"{settings.REHOST_BASE_URL}{reverse('podcast-rss-feed-api', args=[podcast.id])}"
 
         context = {
             "podcasts": podcasts,
@@ -312,6 +309,7 @@ class PodcastStatusUIView(View):
                     )
                     episode.removed_duration_str = "Error"
 
+        podcast.rehosted_rss_url = f"{settings.REHOST_BASE_URL}{reverse('podcast-rss-feed-api', args=[podcast.id])}"
         return render(
             request, "podcasts/status.html", {"podcast": podcast, "episodes": episodes}
         )
@@ -395,6 +393,7 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
             "episodes": episodes,
             "build_date": datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
             "rehost_base_url": settings.REHOST_BASE_URL,
+            "rehosted_rss_url": f"{settings.REHOST_BASE_URL}{reverse('podcast-rss-feed-api', args=[podcast.id])}",
         }
         rss_feed = render_to_string("podcasts/rss_feed_template.xml", context)
         return HttpResponse(rss_feed, content_type="application/xml")

@@ -62,7 +62,19 @@ class Episode(models.Model):
     title = models.CharField(max_length=255)
     pub_date = models.DateTimeField()
     original_audio_url = models.URLField(max_length=1024)
-    rehosted_audio_url = models.URLField(null=True, blank=True)
+    @property
+    def rehosted_audio_url(self):
+        """
+        Generates the rehosted audio URL on the fly.
+        """
+        if not self.rehosted_media_id:
+            return None
+        from django.conf import settings
+        from django.urls import reverse
+        relative_url = reverse(
+            "serve_media_episode", kwargs={"media_guid": self.rehosted_media_id}
+        )
+        return f"{settings.REHOST_BASE_URL}{relative_url}"
     rehosted_audio_size = models.BigIntegerField(
         default=0, help_text="Size of the rehosted audio file in bytes."
     )
