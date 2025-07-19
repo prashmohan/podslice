@@ -20,7 +20,7 @@ COPY . /app/
 
 # Collect static files
 # Provide a dummy key during build to allow collectstatic to run
-RUN GEMINI_API_KEY="dummy-key" DJANGO_SECRET_KEY="dummy-key" python manage.py collectstatic --noinput
+RUN GEMINI_MODEL="dummy-key" GEMINI_API_KEY="dummy-key" DJANGO_SECRET_KEY="dummy-key" REHOST_BASE_URL="dummy-key" python manage.py collectstatic --noinput
 
 # Expose the port Gunicorn will run on
 EXPOSE 8000

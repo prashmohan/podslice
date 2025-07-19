@@ -35,7 +35,7 @@ BROWSER_USER_AGENT = getattr(
 GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-2.5-pro")
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=settings.DOWNLOAD_WORKER_COUNT)
 EPISODES_PER_FEED = getattr(settings, "EPISODES_PER_FEED", 5)
-EPISODE_LIMIT = getattr(settings, "EPISODE_LIMIT", 5)
+EPISODE_LIMIT = getattr(settings, "MAX_EPISODES_PER_PODCAST", 5)
 
 # A thread-safe dictionary to hold locks for each podcast being polled.
 polling_locks = {}
@@ -123,7 +123,7 @@ class AdManager:
                 json_string,
             )
             self.episode.status = Episode.Status.FAILED
-            self.episode.save(update_fields=["status"])
+            Episode.objects.filter(id=self.episode.id).update(status=Episode.Status.FAILED)
             return []
 
     def analyze_audio(
@@ -134,7 +134,7 @@ class AdManager:
             audio_path, audio_duration_seconds
         )
         self.episode.ad_segments = gemini_response
-        self.episode.save(update_fields=["ad_segments"])
+        Episode.objects.filter(id=self.episode.id).update(ad_segments=gemini_response)
         logger.info(
             "Gemini analysis complete for '%s'. Ad segments: %s",
             self.episode.title,
@@ -155,7 +155,7 @@ class EpisodeProcessor:
         """Updates the status of the episode and logs the change."""
         self.episode.status = status
         if save:
-            self.episode.save(update_fields=["status"])
+            Episode.objects.filter(id=self.episode.id).update(status=status)
         logger.info(
             "Episode '%s' (%s) status updated to %s.",
             self.episode.title,
@@ -198,17 +198,18 @@ class EpisodeProcessor:
         relative_url = reverse(
             "serve_media_episode", kwargs={"media_guid": media_entry.media_guid}
         )
-        self.episode.rehosted_audio_url = f"{settings.REHOST_BASE_URL}{relative_url}"
+        rehosted_audio_url = f"{settings.REHOST_BASE_URL}{relative_url}"
+
+        self.episode.rehosted_audio_url = rehosted_audio_url
         self.episode.rehosted_audio_size = file_size
         self.episode.rehosted_media_id = media_entry.media_guid
         self._update_status(Episode.Status.COMPLETE, save=False)
-        self.episode.save(
-            update_fields=[
-                "status",
-                "rehosted_audio_url",
-                "rehosted_audio_size",
-                "rehosted_media_id",
-            ]
+
+        Episode.objects.filter(id=self.episode.id).update(
+            status=Episode.Status.COMPLETE,
+            rehosted_audio_url=rehosted_audio_url,
+            rehosted_audio_size=file_size,
+            rehosted_media_id=media_entry.media_guid,
         )
         logger.info(
             "Rehost completed successfully for Episode '%s' (%s).",
@@ -296,10 +297,13 @@ class EpisodeProcessor:
         audio_path = self._download_audio()
         if not audio_path:
             return None
-
         self._update_status(Episode.Status.ANALYZING)
         audio_duration_seconds = self._get_audio_duration(audio_path)
         if audio_duration_seconds is None:
+            logger.error(
+                "Did not get audio length for '%s'.",
+                self.episode.title,
+            )
             os.remove(audio_path)
             return None
 
@@ -495,12 +499,21 @@ class EpisodeProcessor:
             ad_segments_list = self.ad_manager.analyze_audio(
                 audio_path, audio_duration_seconds
             )
+            logger.info("Finished Ad analysis audio for '%s' from podcast '%s'.",
+                        self.episode.title,
+                        self.episode.podcast.title,
+            )
 
             self._slice_and_save_audio(
                 audio_path, ad_segments_list, audio_duration_seconds
             )
+            logger.info("Finished slicing audio for '%s' from podcast '%s'.",
+                        self.episode.title,
+                        self.episode.podcast.title,
+            )
 
-        except (ValueError, IOError):
+
+        except Exception:
             logger.error(
                 "An unexpected error occurred during rehosting of '%s'",
                 self.episode.title,
@@ -818,7 +831,7 @@ def rehost_episode_audio(episode_id: int):
         processor = EpisodeProcessor(episode)
         processor.rehost_audio()
     except Episode.DoesNotExist:
-        logger.error("Episode with ID %s not found. Aborting rehost task.", episode_id)
+        logger.error("Episode with ID %s (%s)not found. Aborting rehost task.", episode_id, episode.title)
 
 
 def poll_feed(podcast_id: uuid.UUID):

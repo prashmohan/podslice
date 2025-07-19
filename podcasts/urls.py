@@ -50,7 +50,7 @@ urlpatterns = [
     path('episodes/<int:episode_id>/reprocess/',
             EpisodeReprocessView.as_view(),
             name='episode-reprocess'),
-    path('media/episodes/<uuid:media_guid>/',
+    path('media/episodes/<uuid:media_guid>',
          serve_rehosted_media,
          name='serve_media_episode'),
     path('opml/export/',

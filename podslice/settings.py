@@ -50,6 +50,8 @@ CSRF_TRUSTED_ORIGINS = os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "http://loc
 DOWNLOAD_WORKER_COUNT = 1
 DOWNLOAD_TIMEOUT_SEC = 60
 AD_SPLICING_TIMEOUT_SEC = 600
+MAX_EPISODES_PER_PODCAST = int(os.environ.get("MAX_EPISODES_PER_PODCAST", 10))
+
 
 
 # Application definition
@@ -159,13 +161,18 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 # Re-host server base URL
-REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL", "http://192.168.68.83:12341")
+REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL")
+if not REHOST_BASE_URL:
+    raise ImproperlyConfigured("REHOST_BASE_URL environment variable not set.")
 
 # Gemini API Key
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
-GEMINI_MODEL = "gemini-2.5-pro"
+
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL")
+if not GEMINI_MODEL:
+    raise ImproperlyConfigured("GEMINI_MODEL environment variable not set.")
 
 
 LOGGING = {

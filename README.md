@@ -55,6 +55,7 @@ To get started with Podslice, you'll need Python 3.8+ and pip.
     DJANGO_SECRET_KEY='your_generated_secret_key'
     GEMINI_API_KEY='your_gemini_api_key'
     REHOST_BASE_URL='http://localhost:8000'
+    MAX_EPISODES_PER_PODCAST=10
     ```
 
 ## Running the Application
