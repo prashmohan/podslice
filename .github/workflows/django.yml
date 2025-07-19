@@ -29,6 +29,7 @@ jobs:
       env:
         DJANGO_SECRET_KEY: 'a-dummy-secret-key-for-testing'
         GEMINI_API_KEY: 'a-dummy-gemini-key-for-testing'
+        GEMINI_MODEL: 'a-dummy-gemini-key-for-testing'
         REHOST_BASE_URL: 'http://localhost:8000'
       run: |
         python manage.py test podcasts
