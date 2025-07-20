@@ -41,24 +41,31 @@ EPISODE_LIMIT = getattr(settings, "MAX_EPISODES_PER_PODCAST", 5)
 polling_locks = {}
 
 GEMINI_PROMPT = """
-You are an audio editing assistant. Your sole task is to analyze a podcast audio file 
-and identify all segments that are **not** the main content. The goal is to create a list 
-of timestamps for segments that can be removed.
-Identify the precise start and end times for any of the following non-essential audio segments:
-* **Advertisements** (pre-produced ads, host-read sponsor messages)
-* **Introduction Music/Jingles**
-* **Outro Music/Jingles**
-* **Host Banter** that is clearly separate from the main topic (e.g., initial greetings, off-topic chat before the core discussion begins).
-* **Calls to Action** (e.g., "subscribe," "follow us on social media," "visit our website").
-* **Extended periods of silence** (longer than 3 seconds).
-**Instructions:**
-1.  Focus exclusively on identifying the segments listed above.
-2.  Do **not** identify or timestamp the main content of the podcast.
-3.  Return a JSON array of objects, where each object has 'start' and 'end' keys representing the start and end times of the ad segment in seconds.
-4.  If no ads are found, return an empty array.
-5.  Only generate the JSON array and nothing other than the array.
-6.  Audio duration is {audio_duration_seconds} seconds.
-Example: [{{"start": 60.5, "end": 95.0}}]
+You are an intelligent audio analysis model specifically designed to identify and timestamp non-essential segments within podcast audio files. Your objective is to assist in the automatic removal of these segments to enhance the listener's experience.
+
+Identify the precise start and end times for all segments that fall under the following categories, as these are considered removable:
+
+* **Advertisements:** This includes pre-recorded ads, sponsor messages read by the host, and any promotional content.
+* **Introductory/Outro Segments:** This covers intro music, jingles, and any standardized opening or closing announcements that are not part of the core discussion.
+* **Off-Topic Host Segments:** Identify periods where hosts engage in general greetings, personal anecdotes, irrelevant banter, or pre-topic discussions that do not directly contribute to the main subject matter of the episode.
+* **Calls to Action (CTAs):** Timestamp segments where the podcast encourages listeners to subscribe, follow, visit websites, support financially, or engage in other promotional activities.
+* **Extended Silence:** Mark any periods of continuous silence lasting 3 seconds or longer.
+
+**Constraints & Output Format:**
+
+1.  Prioritize accuracy in identifying the *exact* start and end times of these segments.
+2.  Do *not* identify or timestamp the primary, valuable content of the podcast.
+3.  The analysis will be performed on an audio file of {audio_duration_seconds} seconds.
+4.  Your output *must* be a JSON array of objects. Each object *must* contain 'start' and 'end' keys, representing the timestamp in seconds (floating-point numbers are preferred for precision).
+5.  If no removable segments are detected, return an empty JSON array: `[]`.
+6.  Generate *only* the JSON array and no additional text, explanations, or conversational elements.
+
+Example Output:
+[
+  {"start": 60.5, "end": 95.0},
+  {"start": 180.2, "end": 190.8},
+  {"start": 300.0, "end": 305.5}
+]
 """
 
 
@@ -78,7 +85,7 @@ class AdManager:
             genai.configure(api_key=settings.GEMINI_API_KEY)
             model = genai.GenerativeModel(GEMINI_MODEL)
             audio_file = genai.upload_file(path=audio_path)
-            prompt = GEMINI_PROMPT.format(audio_duration_seconds=audio_duration_seconds)
+            prompt = GEMINI_PROMPT
             response = model.generate_content([prompt, audio_file])
             return response.text
         except (ValueError, IOError) as _:
