@@ -45,7 +45,7 @@ def start_polling_thread():
     Starts the background polling thread.
     """
     shutdown_event = threading.Event()
-    polling_interval = getattr(settings, "PODCAST_POLLING_INTERVAL", 60 * 60)
+    polling_interval = settings.PODCAST_POLLING_INTERVAL
 
     polling_thread = threading.Thread(
         target=polling_loop,
@@ -70,5 +70,4 @@ class PodcastsConfig(AppConfig):
         Starts the polling thread when the app is ready.
         """
         # Avoid running in management commands like 'migrate'
-        if "runserver" in sys.argv:
-            start_polling_thread()
+        start_polling_thread()
