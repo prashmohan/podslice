@@ -97,7 +97,6 @@ logs/
 # Never commit secrets!
 # Use environment variables or a separate untracked config file.
 .env
-.env.*
 !.env.example # Often an example .env file IS committed
 secrets.ini
 secret_key.py
@@ -129,6 +128,4 @@ site/ # if using mkdocs or similar
 # --- Temporary files ---
 *.tmp
 *.temp
-
 *.mp3
-.env

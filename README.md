@@ -21,10 +21,14 @@ Podslice is a Django-based application designed to download podcast episodes, in
 *   **RSS Parsing:** `feedparser`
 *   **HTTP Requests:** `requests`
 *   **Database:** SQLite
+*   **Containerization:** Docker, Docker Compose
+*   **Web Server:** Nginx
 
 ## Getting Started
 
-To get started with Podslice, you'll need Python 3.8+ and pip.
+### Local Development (Without Docker)
+
+To get started with Podslice locally, you'll need Python 3.8+ and pip.
 
 1.  **Clone the repository:**
     ```bash
@@ -44,30 +48,60 @@ To get started with Podslice, you'll need Python 3.8+ and pip.
     ```
 
 4.  **Set Environment Variables:**
-    Before running the application, you must set the following environment variables. You can create a `.env` file in the project root to store these variables.
+    Before running the application, you must set the environment variables listed in the **Environment Variables** section below. You can create a `.env` file in the project root to store these variables.
 
-    *   `DJANGO_SECRET_KEY`: A unique secret key for your Django project. You can generate one using `python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'`
-    *   `GEMINI_API_KEY`: Your API key for Google Generative AI.
-    *   `REHOST_BASE_URL`: The base URL where your re-hosted media will be served (e.g., `http://localhost:8000`).
-
-    Example `.env` file:
+5.  **Run the Application:**
+    ```bash
+    python manage.py runserver
     ```
-    DJANGO_SECRET_KEY='your_generated_secret_key'
-    GEMINI_API_KEY='your_gemini_api_key'
-    REHOST_BASE_URL='http://localhost:8000'
-    MAX_EPISODES_PER_PODCAST=10
-    LOG_LEVEL=DEBUG
+    This command starts the Django development server.
+
+### Docker Deployment
+
+The recommended way to run Podslice is using Docker and Docker Compose.
+
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/prashmohan/podslice.git
+    cd podslice
     ```
 
-## Running the Application
+2.  **Create an environment file:**
+    Create a `.env` file by copying the example and filling in the required values.
+    ```bash
+    cp .env.example .env
+    ```
+    See the **Environment Variables** section for more details on each variable.
 
-Podslice is a monolithic Django application.
+3.  **Build and run with Docker Compose:**
+    ```bash
+    docker-compose up --build
+    ```
+    This command will build the Docker image and start the `app` and `web` (Nginx) services. The application will be accessible at `http://localhost:12343`.
 
-```bash
-python manage.py runserver
-```
+## Environment Variables
 
-This single command starts the Django development server, which handles the web interface, API endpoints, and serves the re-hosted media. Background tasks for processing podcasts are managed using Python threads within the same process.
+The following environment variables are used to configure the application. They can be placed in a `.env` file in the project root.
+
+| Variable                      | Description                                                                                                   | Default                               |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `DJANGO_SECRET_KEY`           | A unique secret key for your Django project.                                                                  | A randomly generated key              |
+| `GEMINI_API_KEY`              | Your API key for Google Generative AI.                                                                        | **Required**                          |
+| `GEMINI_MODEL`                | The Gemini model to use for analysis.                                                                         | `gemini-1.5-pro`                      |
+| `REHOST_BASE_URL`             | The base URL where your re-hosted media will be served (e.g., `http://localhost:12343`).                       | **Required**                          |
+| `DJANGO_ALLOWED_HOSTS`        | A comma-separated list of allowed hostnames.                                                                  | `localhost,127.0.0.1`                 |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | A comma-separated list of trusted origins for CSRF.                                                           | `http://localhost:12343`              |
+| `SECURE_SSL_REDIRECT`         | If `True`, redirects all HTTP requests to HTTPS.                                                              | `False`                               |
+| `MAX_EPISODES_PER_PODCAST`    | The maximum number of recent episodes to download and process for each podcast.                               | `10`                                  |
+| `PODCAST_POLLING_INTERVAL`    | The interval, in seconds, at which to poll for new podcast episodes.                                          | `43200` (12 hours)                    |
+| `LOG_LEVEL`                   | The logging level for the application.                                                                        | `INFO`                                |
+
+## Nginx Configuration
+
+The provided `nginx.conf` sets up a reverse proxy.
+
+*   **Port `12343`:** This is the main port for the web interface and API. It proxies requests to the Django application running on port `8000`. It also serves static and media files directly.
+*   **Port `12341`:** This port is dedicated to serving the re-hosted RSS feeds and media files. This allows for a separate, cleaner URL for podcast clients.
 
 ## Database Migrations
 
@@ -77,6 +111,11 @@ After making changes to models, you'll need to create and apply migrations.
 python manage.py makemigrations
 python manage.py migrate
 ```
+If you are running the application with Docker, you will need to run these commands inside the `app` container:
+```bash
+docker-compose exec app python manage.py makemigrations
+docker-compose exec app python manage.py migrate
+```
 
 ## Running Tests
 
@@ -85,10 +124,14 @@ To run the tests for the `podcasts` app:
 ```bash
 python manage.py test podcasts
 ```
+To run tests inside the Docker container:
+```bash
+docker-compose exec app python manage.py test podcasts
+```
 
 ## Code Style and Conventions
 
 *   Follow Django's coding style.
 *   Keep models, views, and serializers in their respective files.
-*   Use Python threads for any long-running tasks to avoid blocking web requests.
+*   Use Python's `threading` module for any long-running tasks to avoid blocking web requests.
 *   Write tests for new features and bug fixes.
