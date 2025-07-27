@@ -2,7 +2,6 @@
 This module contains the app configuration for the podcasts app.
 """
 import logging
-import sys
 import threading
 
 from django.apps import AppConfig

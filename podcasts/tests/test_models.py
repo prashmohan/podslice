@@ -1,13 +1,15 @@
 """
 Tests for the models in the podcasts app.
 """
-from django.test import TestCase, override_settings
-from podcasts.models import Episode, Podcast, RehostedMedia
-from django.urls import reverse
 import uuid
 
-@override_settings(REHOST_BASE_URL="http://localhost:12343")
+from django.test import TestCase, override_settings
+from django.urls import reverse
 
+from podcasts.models import Episode, Podcast, RehostedMedia
+
+
+@override_settings(REHOST_BASE_URL="http://localhost:12343")
 class EpisodeModelTest(TestCase):
     """Tests for the Episode model."""
 
@@ -34,7 +36,6 @@ class EpisodeModelTest(TestCase):
 
         expected_url = f"http://localhost:12343{reverse('serve_media_episode', kwargs={'media_guid': media_guid})}"
         self.assertEqual(episode.rehosted_audio_url, expected_url)
-
 
 
 class PodcastModelTest(TestCase):

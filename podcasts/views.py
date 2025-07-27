@@ -232,8 +232,18 @@ class PodcastSubscribeUIView(View):
         """
         Handles GET requests and renders the subscription form.
         """
-        podcasts = Podcast.objects.all()
-        return render(request, "podcasts/subscribe.html", {"podcasts": podcasts})
+        podcasts = Podcast.objects.all().order_by('title')
+        last_polled_time = Podcast.objects.exclude(last_polled=None).order_by('-last_polled').first()
+        pending_episodes = Episode.objects.filter(
+            status__in=[Episode.Status.NEW, Episode.Status.DOWNLOADING, Episode.Status.PROCESSING]
+        ).order_by('pub_date')
+
+        context = {
+            'podcasts': podcasts,
+            'last_polled_time': last_polled_time.last_polled if last_polled_time else None,
+            'pending_episodes': pending_episodes
+        }
+        return render(request, "podcasts/subscribe.html", context)
 
     def post(self, request):
         """

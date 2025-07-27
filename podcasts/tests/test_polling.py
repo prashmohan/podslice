@@ -6,19 +6,21 @@ import threading
 from unittest import mock
 
 from django.conf import settings
-from django.test import TestCase, override_settings
+from django.test import override_settings
 from django.utils import timezone
 
+from podcasts.tests.test_base import PodcastTestCase
 from podcasts.apps import polling_loop, start_polling_thread
 from podcasts.models import Episode, Podcast
-from podcasts.tasks import poll_feed, rehost_episode_audio
+from podcasts.tasks import poll_feed, rehost_episode_audio, polling_locks
 
 
-class PollingThreadTest(TestCase):
+class PollingThreadTest(PodcastTestCase):
     """Tests for the polling thread."""
 
     def tearDown(self):
         """Clean up after each test."""
+        super().tearDown()
         Podcast.objects.all().delete()
 
     @mock.patch("podcasts.tasks.poll_feed")
@@ -87,26 +89,12 @@ class PollingThreadTest(TestCase):
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
-class RaceConditionPreventionTest(TestCase):
+class RaceConditionPreventionTest(PodcastTestCase):
     """Tests for race condition prevention."""
-
-    def setUp(self):
-        """Set up the test case."""
-        self.podcast = Podcast.objects.create(
-            title="Test Podcast", rss_url="http://example.com/rss"
-        )
-        self.episode = Episode.objects.create(
-            podcast=self.podcast,
-            title="Test Episode",
-            guid="12345",
-            original_audio_url="http://example.com/episode.mp3",
-            pub_date=timezone.now(),
-        )
 
     def tearDown(self):
         """Clean up after each test."""
-        from podcasts.tasks import polling_locks
-
+        super().tearDown()
         polling_locks.clear()
 
     @mock.patch("podcasts.tasks.EpisodeProcessor._fetch_and_prepare_audio")

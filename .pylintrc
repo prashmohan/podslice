@@ -2,6 +2,8 @@
 load-plugins=pylint_django
 django-settings-module=podslice.settings
 init-hook='import sys; sys.path.append(".")'
+ignore=podcasts/migrations
+
 
 [FORMAT]
 max-line-length=120

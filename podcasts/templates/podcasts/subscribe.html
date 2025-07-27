@@ -1,4 +1,5 @@
 {% extends 'podcasts/base.html' %}
+{% load tz %}
 
 {% block title %}Subscribe to a Podcast{% endblock %}
 
@@ -29,9 +30,10 @@
 
         <div class="card shadow-sm mb-4">
             <div class="card-header">
-                <h3 class="card-title mb-0">Episode Status</h3>
+                <h3 class="card-title mb-0">System Status</h3>
             </div>
             <div class="card-body">
+                <p><strong>Last polled for new episodes:</strong> {{ last_polled_time|localtime|date:"Y-m-d H:i:s"|default:"Never" }}</p>
                 <table class="table table-sm">
                     <thead>
                         <tr>
@@ -52,6 +54,36 @@
                 </table>
             </div>
         </div>
+
+        {% if pending_episodes %}
+        <div class="card shadow-sm mb-4">
+            <div class="card-header">
+                <h3 class="card-title mb-0">Pending Episodes</h3>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>Podcast</th>
+                            <th>Episode</th>
+                            <th>Published</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for episode in pending_episodes %}
+                        <tr>
+                            <td>{{ episode.podcast.title }}</td>
+                            <td>{{ episode.title }}</td>
+                            <td>{{ episode.pub_date|date:"Y-m-d" }}</td>
+                            <td><span class="badge bg-secondary">{{ episode.get_status_display }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
 
         <div class="card shadow-sm">
             <div class="card-header d-flex justify-content-between align-items-center">

@@ -1,6 +1,7 @@
 """
 This module contains Celery tasks for the podcasts app.
 """
+
 import json
 import logging
 import os
@@ -17,7 +18,6 @@ import feedparser
 import google.generativeai as genai
 import requests
 from django.conf import settings
-from django.urls import reverse
 from django.utils import timezone
 
 from podcasts.models import Episode, Podcast, RehostedMedia
@@ -76,9 +76,7 @@ class AdManager:
         """Initializes the AdManager."""
         self.episode = episode
 
-    def _get_ad_segments_from_gemini(
-        self, audio_path: str, audio_duration_seconds: float
-    ) -> str:
+    def _get_ad_segments_from_gemini(self, audio_path: str) -> str:
         """Sends audio to the Gemini API for ad detection."""
         logger.debug("Sending audio to Gemini for ad detection.")
         try:
@@ -100,10 +98,7 @@ class AdManager:
             self.episode.id,
             gemini_response,
         )
-        match = re.search(
-            r"```json\n(.*?)?\n```|(.*)",
-            gemini_response, re.DOTALL
-        )
+        match = re.search(r"```json\n(.*?)?\n```|(.*)", gemini_response, re.DOTALL)
         if not match:
             logger.warning(
                 "No valid JSON array found in Gemini response for Episode '%s' (%s).",
@@ -130,16 +125,14 @@ class AdManager:
                 json_string,
             )
             self.episode.status = Episode.Status.FAILED
-            Episode.objects.filter(id=self.episode.id).update(status=Episode.Status.FAILED)
+            Episode.objects.filter(id=self.episode.id).update(
+                status=Episode.Status.FAILED
+            )
             return []
 
-    def analyze_audio(
-        self, audio_path: str, audio_duration_seconds: float
-    ) -> List[Dict[str, float]]:
+    def analyze_audio(self, audio_path: str) -> List[Dict[str, float]]:
         """Analyzes the audio, saves the raw response, and returns parsed segments."""
-        gemini_response = self._get_ad_segments_from_gemini(
-            audio_path, audio_duration_seconds
-        )
+        gemini_response = self._get_ad_segments_from_gemini(audio_path)
         self.episode.ad_segments = gemini_response
         Episode.objects.filter(id=self.episode.id).update(ad_segments=gemini_response)
         logger.info(
@@ -178,7 +171,11 @@ class EpisodeProcessor:
         return os.path.join(media_dir, final_audio_filename)
 
     def _save_processed_audio(
-        self, media_guid: uuid.UUID, final_audio_path: str, file_size: int, output_mime_type: str = "audio/mpeg"
+        self,
+        media_guid: uuid.UUID,
+        final_audio_path: str,
+        file_size: int,
+        output_mime_type: str = "audio/mpeg",
     ):
         """Creates a RehostedMedia record and updates the episode with the new URL."""
         logger.debug("Creating RehostedMedia entry in the database.")
@@ -376,8 +373,11 @@ class EpisodeProcessor:
         )
         try:
             subprocess.run(
-                ffmpeg_cmd, check=True, capture_output=True, text=True,
-                timeout=settings.AD_SPLICING_TIMEOUT_SEC
+                ffmpeg_cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=settings.AD_SPLICING_TIMEOUT_SEC,
             )
             file_size = os.path.getsize(final_audio_path)
             return file_size
@@ -506,22 +506,21 @@ class EpisodeProcessor:
             audio_path, audio_duration_seconds = prepared_audio
 
             self._update_status(Episode.Status.PROCESSING)
-            ad_segments_list = self.ad_manager.analyze_audio(
-                audio_path, audio_duration_seconds
-            )
-            logger.info("Finished Ad analysis audio for '%s' from podcast '%s'.",
-                        self.episode.title,
-                        self.episode.podcast.title,
+            ad_segments_list = self.ad_manager.analyze_audio(audio_path)
+            logger.info(
+                "Finished Ad analysis audio for '%s' from podcast '%s'.",
+                self.episode.title,
+                self.episode.podcast.title,
             )
 
             self._slice_and_save_audio(
                 audio_path, ad_segments_list, audio_duration_seconds
             )
-            logger.info("Finished slicing audio for '%s' from podcast '%s'.",
-                        self.episode.title,
-                        self.episode.podcast.title,
+            logger.info(
+                "Finished slicing audio for '%s' from podcast '%s'.",
+                self.episode.title,
+                self.episode.podcast.title,
             )
-
 
         except Exception:
             logger.error(
@@ -840,7 +839,11 @@ def rehost_episode_audio(episode_id: int):
         processor = EpisodeProcessor(episode)
         processor.rehost_audio()
     except Episode.DoesNotExist:
-        logger.error("Episode with ID %s (%s)not found. Aborting rehost task.", episode_id, episode.title)
+        logger.error(
+            "Episode with ID %s (%s)not found. Aborting rehost task.",
+            episode_id,
+            episode.title,
+        )
 
 
 def poll_feed(podcast_id: uuid.UUID):

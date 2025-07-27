@@ -30,29 +30,44 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     SECRET_KEY = get_random_secret_key()
-    logger.error("DJANGO_SECRET_KEY environment variable not set. Creating default key.")
+    logger.error(
+        "DJANGO_SECRET_KEY environment variable not set. Creating default key."
+    )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('true', '1', 't')
+DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("true", "1", "t")
 
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
 # Security settings
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True').lower() in ('true', '1', 't')
-SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', 31536000))
-SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'True').lower() in ('true', '1', 't')
-CSRF_COOKIE_SECURE = os.environ.get('CSRF_COOKIE_SECURE', 'True').lower() in ('true', '1', 't')
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = os.environ.get("SECURE_SSL_REDIRECT", "True").lower() in (
+    "true",
+    "1",
+    "t",
+)
+SECURE_HSTS_SECONDS = int(os.environ.get("SECURE_HSTS_SECONDS", 31536000))
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "True").lower() in (
+    "true",
+    "1",
+    "t",
+)
+CSRF_COOKIE_SECURE = os.environ.get("CSRF_COOKIE_SECURE", "True").lower() in (
+    "true",
+    "1",
+    "t",
+)
 
 
-CSRF_TRUSTED_ORIGINS = os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "http://localhost:12343,http://127.0.0.1:12343").split(",")
+CSRF_TRUSTED_ORIGINS = os.environ.get(
+    "DJANGO_CSRF_TRUSTED_ORIGINS", "http://localhost:12343,http://127.0.0.1:12343"
+).split(",")
 
 DOWNLOAD_WORKER_COUNT = 1
 DOWNLOAD_TIMEOUT_SEC = 60
 AD_SPLICING_TIMEOUT_SEC = 600
 MAX_EPISODES_PER_PODCAST = int(os.environ.get("MAX_EPISODES_PER_PODCAST", 10))
 PODCAST_POLLING_INTERVAL = int(os.environ.get("PODCAST_POLLING_INTERVAL", 3600))
-
 
 
 # Application definition
@@ -136,7 +151,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+TIME_ZONE = os.environ.get("TIME_ZONE", "UTC")
 
 USE_I18N = True
 
