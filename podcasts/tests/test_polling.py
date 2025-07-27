@@ -21,7 +21,7 @@ class PollingThreadTest(PodcastTestCase):
     def tearDown(self):
         """Clean up after each test."""
         super().tearDown()
-        Podcast.objects.all().delete()
+        
 
     @mock.patch("podcasts.tasks.poll_feed")
     def test_polling_loop(self, mock_poll_feed):
@@ -31,7 +31,7 @@ class PollingThreadTest(PodcastTestCase):
         polling_loop(shutdown_event, 1)
         mock_poll_feed.assert_not_called()
 
-        Podcast.objects.create(title="Test Podcast", rss_url="http://example.com/rss")
+        # self.podcast is already created in setUp
         shutdown_event.clear()
 
         def side_effect(*_args, **_kwargs):
@@ -58,9 +58,10 @@ class PollingThreadTest(PodcastTestCase):
     @mock.patch("podcasts.tasks.feedparser")
     def test_poll_feed_reprocesses_stuck_episodes(self, mock_feedparser, mock_submit):
         """Test that poll_feed reprocesses stuck episodes."""
-        podcast = Podcast.objects.create(
-            title="Test Podcast", rss_url="http://example.com/rss"
-        )
+        # Ensure a clean slate for episodes before this test
+        Episode.objects.all().delete()
+
+        podcast = self.podcast
         stuck_time = timezone.now() - timezone.timedelta(hours=2)
 
         episode = Episode.objects.create(
