@@ -19,7 +19,7 @@ from django.urls import reverse
 from django.views import View
 from rest_framework import generics, serializers
 
-from podcasts.forms import OPMLImportForm
+from podcasts.forms import OPMLImportForm, PodcastSettingsForm
 from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.serializers import PodcastSerializer
 from podcasts.tasks import (
@@ -320,9 +320,30 @@ class PodcastStatusUIView(View):
                     episode.removed_duration_str = "Error"
 
         podcast.rehosted_rss_url = f"{settings.REHOST_BASE_URL}{reverse('podcast-rss-feed-api', args=[podcast.id])}"
+        settings_form = PodcastSettingsForm(instance=podcast)
         return render(
-            request, "podcasts/status.html", {"podcast": podcast, "episodes": episodes}
+            request, "podcasts/status.html", {
+                "podcast": podcast,
+                "episodes": episodes,
+                "settings_form": settings_form
+            }
         )
+
+
+class PodcastUpdateSettingsView(View):
+    """
+    A view to update podcast settings.
+    """
+
+    def post(self, request, podcast_id):
+        """
+        Handles POST requests and updates podcast settings.
+        """
+        podcast = get_object_or_404(Podcast, id=podcast_id)
+        form = PodcastSettingsForm(request.POST, instance=podcast)
+        if form.is_valid():
+            form.save()
+        return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id}))
 
 
 class PodcastRefreshView(View):

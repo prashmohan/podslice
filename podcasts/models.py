@@ -22,6 +22,10 @@ class Podcast(models.Model):
     )
     artwork_url = models.URLField(blank=True, null=True)
     last_polled = models.DateTimeField(null=True, blank=True)
+    max_episodes = models.PositiveIntegerField(
+        default=10,
+        help_text="Maximum number of episodes to keep for this podcast. If set to 0, all episodes will be retained.",
+    )
 
     class Meta:
         """Meta options for the Podcast model."""

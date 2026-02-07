@@ -9,6 +9,7 @@ from unittest import mock
 import requests
 from django.conf import settings
 from django.test import override_settings
+from django.utils import timezone
 
 
 from podcasts.tests.test_base import PodcastTestCase
@@ -414,3 +415,66 @@ class DeletePodcastDataTest(PodcastTestCase):
                 media_guid=self.rehosted_media.media_guid
             ).exists()
         )
+
+
+@override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
+class EpisodeRetentionTest(PodcastTestCase):
+    """
+    Test cases for the _enforce_episode_limit method in FeedManager.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.feed_manager = FeedManager(self.podcast)
+        # Create multiple episodes with different publication dates
+        Episode.objects.all().delete()
+        self.episodes = []
+        for i in range(10):
+            episode = Episode.objects.create(
+                podcast=self.podcast,
+                title=f"Episode {i}",
+                guid=f"guid-{i}",
+                pub_date=timezone.now() - timezone.timedelta(days=i),
+                original_audio_url=f"http://example.com/{i}.mp3",
+            )
+            self.episodes.append(episode)
+
+    def test_enforce_episode_limit_custom_limit(self):
+        """
+        Test that _enforce_episode_limit respects a custom per-podcast limit.
+        """
+        self.podcast.max_episodes = 3
+        self.podcast.save()
+
+        self.feed_manager._enforce_episode_limit()  # pylint: disable=protected-access
+
+        self.assertEqual(self.podcast.episodes.count(), 3)
+        # Newest episodes (0, 1, 2) should remain
+        remaining_guids = self.podcast.episodes.values_list('guid', flat=True)
+        self.assertIn('guid-0', remaining_guids)
+        self.assertIn('guid-1', remaining_guids)
+        self.assertIn('guid-2', remaining_guids)
+
+    def test_enforce_episode_limit_unlimited(self):
+        """
+        Test that _enforce_episode_limit skips deletion when max_episodes is 0.
+        """
+        self.podcast.max_episodes = 0
+        self.podcast.save()
+
+        self.feed_manager._enforce_episode_limit()  # pylint: disable=protected-access
+
+        self.assertEqual(self.podcast.episodes.count(), 10)
+
+    @mock.patch("podcasts.tasks.FeedManager._delete_episode_media")
+    def test_enforce_episode_limit_deletes_media(self, mock_delete_media):
+        """
+        Test that _enforce_episode_limit calls _delete_episode_media for deleted episodes.
+        """
+        self.podcast.max_episodes = 5
+        self.podcast.save()
+
+        self.feed_manager._enforce_episode_limit()  # pylint: disable=protected-access
+
+        self.assertEqual(self.podcast.episodes.count(), 5)
+        self.assertEqual(mock_delete_media.call_count, 5)

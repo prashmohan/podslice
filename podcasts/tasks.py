@@ -35,7 +35,6 @@ BROWSER_USER_AGENT = getattr(
 GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-2.5-pro")
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=settings.DOWNLOAD_WORKER_COUNT)
 EPISODES_PER_FEED = getattr(settings, "EPISODES_PER_FEED", 5)
-EPISODE_LIMIT = getattr(settings, "MAX_EPISODES_PER_PODCAST", 5)
 
 # A thread-safe dictionary to hold locks for each podcast being polled.
 polling_locks = {}
@@ -742,9 +741,16 @@ class FeedManager:
 
     def _enforce_episode_limit(self):
         """Enforces the episode limit for the podcast."""
+        if self.podcast.max_episodes == 0:
+            logger.info(
+                "Episode retention is unlimited for '%s'. Skipping deletion.",
+                self.podcast.title,
+            )
+            return
+
         all_episodes = self.podcast.episodes.all().order_by("-pub_date")
-        if all_episodes.count() > EPISODE_LIMIT:
-            episodes_to_delete = all_episodes[EPISODE_LIMIT:]
+        if all_episodes.count() > self.podcast.max_episodes:
+            episodes_to_delete = all_episodes[self.podcast.max_episodes :]
             logger.info(
                 "Enforcing episode limit. Deleting %d old episodes for '%s'.",
                 len(episodes_to_delete),

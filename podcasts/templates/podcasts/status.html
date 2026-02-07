@@ -23,6 +23,26 @@
                         <p><strong>Rehosted RSS Feed:</strong> <a href="{{ podcast.rehosted_rss_url }}" target="_blank">{{ podcast.rehosted_rss_url }}</a></p>
                         <p><strong>Overall Status:</strong> <span class="badge bg-info">{{ podcast.get_status_display }}</span></p>
                         <p><strong>Last Polled:</strong> {{ podcast.last_polled|date:"Y-m-d H:i:s"|default:"Never" }}</p>
+                        
+                        <hr>
+                        <h5>Settings</h5>
+                        <form action="{% url 'podcast-update-settings' podcast.id %}" method="post" class="row row-cols-lg-auto g-3 align-items-center mb-3">
+                            {% csrf_token %}
+                            <div class="col-12">
+                                <label class="visually-hidden" for="id_max_episodes">Max Episodes</label>
+                                <div class="input-group">
+                                    <div class="input-group-text">Max Episodes</div>
+                                    {{ settings_form.max_episodes }}
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <button type="submit" class="btn btn-sm btn-outline-primary">Update Settings</button>
+                            </div>
+                            <div class="col-12">
+                                <small class="text-muted">(0 = unlimited)</small>
+                            </div>
+                        </form>
+
                         <form action="{% url 'podcast-refresh' podcast.id %}" method="post" class="d-inline">
                             {% csrf_token %}
                             <button type="submit" class="btn btn-sm btn-primary">Refresh Now</button>
