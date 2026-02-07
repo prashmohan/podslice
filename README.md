@@ -11,6 +11,7 @@ Podslice is a Django-based application designed to download podcast episodes, in
 *   **OPML Import/Export:** Export your podcast subscriptions in OPML format for easy migration or backup, and import subscriptions from other podcast clients.
 *   **Episode Status Tracking:** Monitor the processing status of each episode (downloading, analyzing, processing, complete, failed) via the web interface.
 *   **On-demand Reprocessing:** Manually trigger reprocessing of podcasts.
+*   **Per-podcast Retention Settings:** Configure how many episodes to keep for each subscription, with an option for unlimited retention.
 
 ## Technologies Used
 
@@ -92,7 +93,7 @@ The following environment variables are used to configure the application. They 
 | `DJANGO_ALLOWED_HOSTS`        | A comma-separated list of allowed hostnames.                                                                  | `localhost,127.0.0.1`                 |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | A comma-separated list of trusted origins for CSRF.                                                           | `http://localhost:12343`              |
 | `SECURE_SSL_REDIRECT`         | If `True`, redirects all HTTP requests to HTTPS.                                                              | `False`                               |
-| `MAX_EPISODES_PER_PODCAST`    | The maximum number of recent episodes to download and process for each podcast.                               | `10`                                  |
+| `MAX_EPISODES_PER_PODCAST`    | The default maximum number of recent episodes to download and process for new podcast subscriptions. Can be overridden per podcast. | `10`                                  |
 | `PODCAST_POLLING_INTERVAL`    | The interval, in seconds, at which to poll for new podcast episodes.                                          | `43200` (12 hours)                    |
 | `LOG_LEVEL`                   | The logging level for the application.                                                                        | `INFO`                                |
 

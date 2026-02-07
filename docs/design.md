@@ -17,7 +17,7 @@ The vision for Podslice is to be a simple, fire-and-forget service that transfor
 
 The primary goals are:
 * **Ad-Free Experience:** To programmatically identify and remove advertisement segments from podcast episodes.
-* **Content Persistence:** To re-host audio content, providing the user with a durable link that they control.
+* **Content Persistence:** To re-host audio content and provide granular control over episode retention on a per-podcast basis.
 * **Simplicity:** To provide a straightforward web interface and API-driven workflow.
 * **Reliability:** To build a robust, fault-tolerant system that can handle long-running processes and recover from transient errors.
 
@@ -142,8 +142,10 @@ User          Podslice Web/API        Background Thread    Gemini API
     * `rss_url` (URLField, unique): The original URL submitted by the user.
     * `artwork_url` (URLField): URL for the podcast artwork.
     * `last_polled` (DateTimeField): When the feed was last checked for new episodes.
+    * `max_episodes` (PositiveIntegerField): Maximum number of episodes to keep for this podcast. If set to 0, all episodes are retained. Defaults to `MAX_EPISODES_PER_PODCAST`.
 
 * **`Episode` model:**
+    
     * `id` (UUIDField, Primary Key).
     * `podcast` (ForeignKey to `Podcast`): Links the episode to its parent podcast.
     * `guid` (CharField): Unique ID for the episode from the RSS feed.
