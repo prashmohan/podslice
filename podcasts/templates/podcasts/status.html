@@ -75,6 +75,9 @@
                                 {% endif %}">
                                 {{ episode.get_status_display }}
                             </span>
+                            {% if episode.disable_ai_processing %}
+                                <span class="badge bg-dark">AI Disabled</span>
+                            {% endif %}
                         </p>
                         <div class="mt-2">
                             <small class="text-muted">
@@ -84,6 +87,14 @@
                             <form action="{% url 'episode-reprocess' episode.id %}" method="post" class="d-inline ms-2">
                                 {% csrf_token %}
                                 <button type="submit" class="btn btn-sm btn-warning">Reprocess</button>
+                            </form>
+                            <form action="{% url 'episode-toggle-ai' episode.id %}" method="post" class="d-inline ms-2">
+                                {% csrf_token %}
+                                {% if episode.disable_ai_processing %}
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">Enable AI</button>
+                                {% else %}
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Skip AI & Rehost</button>
+                                {% endif %}
                             </form>
                         </div>
                         {% if episode.rehosted_media_id %}
