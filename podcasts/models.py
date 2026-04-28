@@ -91,6 +91,10 @@ class Episode(models.Model):
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.NEW
     )
+    disable_ai_processing = models.BooleanField(
+        default=False,
+        help_text="If True, AI analysis will be skipped and original audio will be rehosted as-is."
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
