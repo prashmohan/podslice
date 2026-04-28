@@ -89,7 +89,7 @@ class TasksClassMethodsTest(PodcastTestCase):
         mock_upload_file.return_value = "fake_file_id"
 
         response = self.ad_manager._get_ad_segments_from_gemini(  # pylint: disable=protected-access
-            "dummy_path.mp3"
+            "dummy_path.mp3", 60.0
         )
         self.assertEqual(response, '[{"start": 10, "end": 20}]')
         mock_upload_file.assert_called_once_with(path="dummy_path.mp3")
@@ -179,10 +179,10 @@ class TasksClassMethodsTest(PodcastTestCase):
         mock_get_segments.return_value = "gemini-response"
         mock_parse_segments.return_value = [{"start": 1, "end": 2}]
 
-        result = self.ad_manager.analyze_audio("/fake/path.mp3")
+        result = self.ad_manager.analyze_audio("/fake/path.mp3", 60.0)
 
         self.assertEqual(result, [{"start": 1, "end": 2}])
-        mock_get_segments.assert_called_once_with("/fake/path.mp3")
+        mock_get_segments.assert_called_once_with("/fake/path.mp3", 60.0)
         mock_parse_segments.assert_called_once_with("gemini-response")
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.ad_segments, "gemini-response")
@@ -301,7 +301,7 @@ class RehostEpisodeAudioTest(PodcastTestCase):
         rehost_episode_audio(self.episode.id)
 
         mock_fetch.assert_called_once()
-        mock_analyze.assert_called_once_with("/fake/path.mp3")
+        mock_analyze.assert_called_once_with("/fake/path.mp3", 60.0)
         mock_slice.assert_called_once_with(
             "/fake/path.mp3", [{"start": 10, "end": 20}], 60.0
         )

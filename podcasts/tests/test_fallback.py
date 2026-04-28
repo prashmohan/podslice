@@ -45,7 +45,7 @@ class GeminiFallbackTest(TestCase):
             mock_settings.GEMINI_MODEL = "primary-model"
             mock_settings.FALLBACK_GEMINI_MODEL = "fallback-model"
             
-            result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3")
+            result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3", 60.0)
             
             self.assertEqual(result, '[{"start": 10, "end": 20}]')
             self.assertEqual(mock_gen_model.call_count, 2)
@@ -61,7 +61,7 @@ class GeminiFallbackTest(TestCase):
         mock_gen_model.return_value = mock_model
         mock_upload.return_value = "fake_file"
 
-        result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3")
+        result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3", 60.0)
         
         self.assertEqual(result, "[]")
         self.assertEqual(mock_gen_model.call_count, 2)
