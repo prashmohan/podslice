@@ -32,7 +32,7 @@ BROWSER_USER_AGENT = getattr(
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/91.0.4472.124 Safari/537.36",
 )
-GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-2.5-pro")
+GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-3-flash-preview")
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=settings.DOWNLOAD_WORKER_COUNT)
 EPISODES_PER_FEED = getattr(settings, "EPISODES_PER_FEED", 5)
 
@@ -76,18 +76,34 @@ class AdManager:
         self.episode = episode
 
     def _get_ad_segments_from_gemini(self, audio_path: str) -> str:
-        """Sends audio to the Gemini API for ad detection."""
-        logger.debug("Sending audio to Gemini for ad detection.")
-        try:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            model = genai.GenerativeModel(GEMINI_MODEL)
-            audio_file = genai.upload_file(path=audio_path)
-            prompt = GEMINI_PROMPT
-            response = model.generate_content([prompt, audio_file])
-            return response.text
-        except (ValueError, IOError) as _:
-            logger.error("Gemini API call failed", exc_info=True)
-            return "[]"
+        """Sends audio to the Gemini API for ad detection with automatic fallback."""
+        models_to_try = [
+            getattr(settings, "GEMINI_MODEL", "gemini-3-flash-preview"),
+            getattr(settings, "FALLBACK_GEMINI_MODEL", "gemini-3.1-flash-lite-preview"),
+        ]
+
+        logger.debug("Attempting ad detection with Gemini.")
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        audio_file = None
+
+        for model_name in models_to_try:
+            try:
+                logger.info("Attempting ad detection with model: %s", model_name)
+                model = genai.GenerativeModel(model_name)
+                if audio_file is None:
+                    audio_file = genai.upload_file(path=audio_path)
+
+                prompt = GEMINI_PROMPT
+                response = model.generate_content([prompt, audio_file])
+                return response.text
+            except Exception as e:
+                logger.warning(
+                    "Gemini API call failed for model %s: %s", model_name, str(e)
+                )
+                if model_name == models_to_try[-1]:
+                    logger.error("All Gemini models failed.")
+
+        return "[]"
 
     def _parse_ad_segments(self, gemini_response: str) -> List[Dict[str, float]]:
         """Parses the JSON response from Gemini to extract ad segments."""
