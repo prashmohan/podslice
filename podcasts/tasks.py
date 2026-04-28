@@ -74,7 +74,9 @@ class AdManager:
         """Initializes the AdManager."""
         self.episode = episode
 
-    def _get_ad_segments_from_gemini(self, audio_path: str) -> str:
+    def _get_ad_segments_from_gemini(
+        self, audio_path: str, audio_duration_seconds: float
+    ) -> str:
         """Sends audio to the Gemini API for ad detection with automatic fallback."""
         models_to_try = [
             getattr(settings, "GEMINI_MODEL", "gemini-3-flash-preview"),
@@ -85,6 +87,12 @@ class AdManager:
         genai.configure(api_key=settings.GEMINI_API_KEY)
         audio_file = None
 
+        prompt = GEMINI_PROMPT.format(
+            episode_title=self.episode.title,
+            podcast_title=self.episode.podcast.title,
+            audio_duration_seconds=audio_duration_seconds,
+        )
+
         for model_name in models_to_try:
             try:
                 logger.info("Attempting ad detection with model: %s", model_name)
@@ -92,7 +100,6 @@ class AdManager:
                 if audio_file is None:
                     audio_file = genai.upload_file(path=audio_path)
 
-                prompt = GEMINI_PROMPT
                 response = model.generate_content([prompt, audio_file])
                 return response.text
             except Exception as e:
@@ -144,9 +151,13 @@ class AdManager:
             )
             return []
 
-    def analyze_audio(self, audio_path: str) -> List[Dict[str, float]]:
+    def analyze_audio(
+        self, audio_path: str, audio_duration_seconds: float
+    ) -> List[Dict[str, float]]:
         """Analyzes the audio, saves the raw response, and returns parsed segments."""
-        gemini_response = self._get_ad_segments_from_gemini(audio_path)
+        gemini_response = self._get_ad_segments_from_gemini(
+            audio_path, audio_duration_seconds
+        )
         self.episode.ad_segments = gemini_response
         Episode.objects.filter(id=self.episode.id).update(ad_segments=gemini_response)
         logger.info(
@@ -524,7 +535,7 @@ class EpisodeProcessor:
                 logger.info("AI processing disabled for '%s'. Skipping analysis.", self.episode.title)
                 ad_segments_list = []
             else:
-                ad_segments_list = self.ad_manager.analyze_audio(audio_path)
+                ad_segments_list = self.ad_manager.analyze_audio(audio_path, audio_duration_seconds)
             logger.info(
                 "Finished Ad analysis audio for '%s' from podcast '%s'.",
                 self.episode.title,
