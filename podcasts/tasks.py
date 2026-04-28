@@ -505,7 +505,11 @@ class EpisodeProcessor:
             audio_path, audio_duration_seconds = prepared_audio
 
             self._update_status(Episode.Status.PROCESSING)
-            ad_segments_list = self.ad_manager.analyze_audio(audio_path)
+            if self.episode.disable_ai_processing:
+                logger.info("AI processing disabled for '%s'. Skipping analysis.", self.episode.title)
+                ad_segments_list = []
+            else:
+                ad_segments_list = self.ad_manager.analyze_audio(audio_path)
             logger.info(
                 "Finished Ad analysis audio for '%s' from podcast '%s'.",
                 self.episode.title,
