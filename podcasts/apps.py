@@ -2,6 +2,7 @@
 This module contains the app configuration for the podcasts app.
 """
 import logging
+import os
 import threading
 
 from django.apps import AppConfig
@@ -68,5 +69,16 @@ class PodcastsConfig(AppConfig):
         """
         Starts the polling thread when the app is ready.
         """
-        # Avoid running in management commands like 'migrate'
+        import sys
+
+        # Avoid running in management commands like 'migrate', 'makemigrations', 'collectstatic', 'test'
+        if any(
+            cmd in sys.argv for cmd in ["migrate", "makemigrations", "collectstatic", "test", "inspect_uuids", "lint", "mark_episode_for_reanalysis"]
+        ):
+            return
+
+        # Also avoid starting multiple threads when using runserver with auto-reload
+        if "runserver" in sys.argv and os.environ.get("RUN_MAIN") != "true":
+            return
+
         start_polling_thread()
