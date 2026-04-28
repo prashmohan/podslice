@@ -40,31 +40,30 @@ EPISODES_PER_FEED = getattr(settings, "EPISODES_PER_FEED", 5)
 polling_locks = {}
 
 GEMINI_PROMPT = """
-You are an intelligent audio analysis model specifically designed to identify and timestamp non-essential segments within podcast audio files. Your objective is to assist in the automatic removal of these segments to enhance the listener's experience.
+You are an expert audio editor. Your task is to identify non-essential segments in the podcast episode "{episode_title}" from the podcast "{podcast_title}".
 
-Identify the precise start and end times for all segments that fall under the following categories, as these are considered removable:
+The total duration of the audio is {audio_duration_seconds} seconds.
 
-* **Advertisements:** This includes pre-recorded ads, sponsor messages read by the host, and any promotional content.
-* **Introductory/Outro Segments:** This covers intro music, jingles, and any standardized opening or closing announcements that are not part of the core discussion.
-* **Off-Topic Host Segments:** Identify periods where hosts engage in general greetings, personal anecdotes, irrelevant banter, or pre-topic discussions that do not directly contribute to the main subject matter of the episode.
-* **Calls to Action (CTAs):** Timestamp segments where the podcast encourages listeners to subscribe, follow, visit websites, support financially, or engage in other promotional activities.
-* **Extended Silence:** Mark any periods of continuous silence lasting 3 seconds or longer.
+Identify the precise start and end times for the following categories:
+* **Ads**: Pre-roll, mid-roll, sponsor reads, or promotional content.
+* **Intro/Outro**: Music, jingles, or repetitive legal/branding announcements.
+* **Off-Topic**: Tangents or banter completely unrelated to "{episode_title}" or "{podcast_title}". 
+* **CTAs**: Requests to subscribe, leave reviews, or visit sponsor URLs.
+* **Silence**: Continuous silence lasting 3 seconds or longer.
 
-**Constraints & Output Format:**
+**Output Requirements:**
+1. Return ONLY a JSON array within a markdown code block (```json ... ```).
+2. Each object must have: "start" (float), "end" (float), and "label" (string).
+3. Timestamps are in seconds from the start of the file.
 
-1.  Prioritize accuracy in identifying the *exact* start and end times of these segments.
-2.  Do *not* identify or timestamp the primary, valuable content of the podcast.
-3.  The analysis will be performed on an audio file of {audio_duration_seconds} seconds.
-4.  Your output *must* be a JSON array of objects. Each object *must* contain 'start' and 'end' keys, representing the timestamp in seconds (floating-point numbers are preferred for precision).
-5.  If no removable segments are detected, return an empty JSON array: `[]`.
-6.  Generate *only* the JSON array and no additional text, explanations, or conversational elements.
-
-Example Output:
+Example:
+```json
 [
-  {"start": 60.5, "end": 95.0},
-  {"start": 180.2, "end": 190.8},
-  {"start": 300.0, "end": 305.5}
+  {{"start": 0.0, "end": 45.2, "label": "intro"}},
+  {{"start": 605.1, "end": 690.5, "label": "ad"}},
+  {{"start": 1200.0, "end": 1205.0, "label": "silence"}}
 ]
+```
 """
 
 
