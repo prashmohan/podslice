@@ -88,8 +88,9 @@ The following environment variables are used to configure the application. They 
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | `DJANGO_SECRET_KEY`           | A unique secret key for your Django project.                                                                  | A randomly generated key              |
 | `GEMINI_API_KEY`              | Your API key for Google Generative AI.                                                                        | **Required**                          |
-| `GEMINI_MODEL`                | The Gemini model to use for analysis.                                                                         | `gemini-1.5-pro`                      |
-| `REHOST_BASE_URL`             | The base URL where your re-hosted media will be served (e.g., `http://localhost:12343`).                       | **Required**                          |
+| `GEMINI_MODEL`                | The Gemini model to use for analysis.                                                                         | `gemini-3-flash-preview`              |
+| `FALLBACK_GEMINI_MODEL`       | The fallback Gemini model to use if the primary model fails.                                                   | `gemini-3.1-flash-lite-preview`       |
+| `REHOST_BASE_URL`             | The base URL where audio files will be served (e.g., http://localhost:12343).                                 | **Required**                          |
 | `DJANGO_ALLOWED_HOSTS`        | A comma-separated list of allowed hostnames.                                                                  | `localhost,127.0.0.1`                 |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | A comma-separated list of trusted origins for CSRF.                                                           | `http://localhost:12343`              |
 | `SECURE_SSL_REDIRECT`         | If `True`, redirects all HTTP requests to HTTPS.                                                              | `False`                               |

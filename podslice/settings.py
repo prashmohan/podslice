@@ -186,9 +186,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL")
-if not GEMINI_MODEL:
-    raise ImproperlyConfigured("GEMINI_MODEL environment variable not set.")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
+FALLBACK_GEMINI_MODEL = os.environ.get("FALLBACK_GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
