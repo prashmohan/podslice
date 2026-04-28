@@ -24,7 +24,13 @@ RUN chmod +x /app/entrypoint.sh
 
 # Collect static files
 # Provide a dummy key during build to allow collectstatic to run
-RUN GEMINI_MODEL="dummy-key" GEMINI_API_KEY="dummy-key" DJANGO_SECRET_KEY="dummy-key" REHOST_BASE_URL="dummy-key" python manage.py collectstatic --noinput
+RUN DJANGO_SECRET_KEY="dummy-key" \
+    GEMINI_API_KEY="dummy-key" \
+    GEMINI_MODEL="dummy-key" \
+    FALLBACK_GEMINI_MODEL="dummy-key" \
+    REHOST_BASE_URL="http://localhost" \
+    SECURE_SSL_REDIRECT="False" \
+    python manage.py collectstatic --noinput
 
 # Expose the port Gunicorn will run on
 EXPOSE 8000
