@@ -18,6 +18,7 @@ from podcasts.views import (
     EpisodeStatusAPIView,
     OPMLBackupView,
     EpisodeReprocessView,
+    EpisodeToggleAIView,
 )
 
 urlpatterns = [
@@ -54,6 +55,9 @@ urlpatterns = [
     path('episodes/<int:episode_id>/reprocess/',
             EpisodeReprocessView.as_view(),
             name='episode-reprocess'),
+    path('episodes/<int:episode_id>/toggle-ai/',
+            EpisodeToggleAIView.as_view(),
+            name='episode-toggle-ai'),
     path('media/episodes/<uuid:media_guid>',
          serve_rehosted_media,
          name='serve_media_episode'),

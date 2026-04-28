@@ -59,6 +59,46 @@ class EpisodeReprocessView(View):
         return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": episode.podcast.id}))
 
 
+class EpisodeToggleAIView(View):
+    """
+    A view to toggle AI processing for a single episode.
+    """
+
+    def post(self, request, episode_id):
+        """
+        Handles POST requests and toggles AI processing for a single episode.
+        """
+        episode = get_object_or_404(Episode, id=episode_id)
+        episode.disable_ai_processing = not episode.disable_ai_processing
+
+        # If disabling AI processing, clear old media and re-trigger
+        if episode.disable_ai_processing:
+            if episode.rehosted_media_id:
+                try:
+                    media_item = RehostedMedia.objects.get(pk=episode.rehosted_media_id)
+                    if os.path.exists(media_item.file_path):
+                        os.remove(media_item.file_path)
+                    media_item.delete()
+                except RehostedMedia.DoesNotExist:
+                    pass
+            episode.status = Episode.Status.NEW
+            episode.rehosted_media_id = None
+            episode.rehosted_audio_size = 0
+            episode.ad_segments = None
+
+        episode.save()
+
+        if episode.disable_ai_processing:
+            reprocess_thread = threading.Thread(
+                target=rehost_episode_audio, args=(episode.id,)
+            )
+            reprocess_thread.start()
+
+        return redirect(
+            reverse("podcast-status-ui", kwargs={"podcast_id": episode.podcast.id})
+        )
+
+
 logger = logging.getLogger(__name__)
 
 BROWSER_USER_AGENT = (
