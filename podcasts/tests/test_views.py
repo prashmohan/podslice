@@ -98,7 +98,33 @@ class PodcastViewsTest(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        mock_create_podcast.assert_called_once()
+        mock_create_podcast.assert_called_once_with("http://example.com/new.xml", download_all=False)
+
+    @mock.patch("podcasts.views.create_podcast_from_url")
+    def test_podcast_subscription_api_view_post_download_all(self, mock_create_podcast):
+        """
+        Test successful podcast subscription via API with download_all.
+        """
+        response = self.client.post(
+            reverse("podcast-subscribe-api"),
+            {"rss_url": "http://example.com/new.xml", "download_all": True},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        mock_create_podcast.assert_called_once_with("http://example.com/new.xml", download_all=True)
+
+    @mock.patch("podcasts.views.create_podcast_from_url")
+    def test_podcast_subscription_ui_view_post_download_all(self, mock_create_podcast):
+        """
+        Test successful podcast subscription via UI with download_all.
+        """
+        mock_create_podcast.return_value = self.podcast
+        response = self.client.post(
+            reverse("podcast-subscribe-ui"),
+            {"rss_url": "http://example.com/new.xml", "download_all": "on"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_302_FOUND)
+        mock_create_podcast.assert_called_once_with("http://example.com/new.xml", download_all=True)
 
     @mock.patch(
         "podcasts.views.create_podcast_from_url", side_effect=ValueError("Invalid Feed")

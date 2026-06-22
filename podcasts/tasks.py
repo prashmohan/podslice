@@ -707,17 +707,19 @@ class FeedManager:
             return None
 
     def _process_feed_entries(
-        self, feed: feedparser.FeedParserDict, episodes_to_process: set
+        self, feed: feedparser.FeedParserDict, episodes_to_process: set, download_all: bool = False
     ):
         """Processes the entries in the feed, creating new episodes as needed."""
         new_episodes_count = 0
         skipped_episodes_count = 0
+        limit = None if download_all else EPISODES_PER_FEED
         logger.info(
-            "Processing the latest %d episodes from '%s'.",
-            EPISODES_PER_FEED,
+            "Processing the latest %s episodes from '%s'.",
+            "all" if limit is None else str(limit),
             self.podcast.title,
         )
-        for entry in feed.entries[:EPISODES_PER_FEED]:
+        entries = feed.entries if limit is None else feed.entries[:limit]
+        for entry in entries:
             result = self._create_or_update_episode_from_entry(entry)
             if result:
                 episode, created = result
@@ -797,7 +799,7 @@ class FeedManager:
             logger.info("Dispatching re-hosting task for episode ID '%s'.", episode_id)
             DOWNLOAD_POOL.submit(rehost_episode_audio, episode_id)
 
-    def poll(self):
+    def poll(self, download_all: bool = False):
         """
         Main method to poll the podcast feed.
 
@@ -826,7 +828,7 @@ class FeedManager:
             if not feed:
                 return
 
-            self._process_feed_entries(feed, episodes_to_process)
+            self._process_feed_entries(feed, episodes_to_process, download_all=download_all)
             self._dispatch_rehosting_tasks(episodes_to_process)
             self._enforce_episode_limit()
         finally:
@@ -882,12 +884,12 @@ def rehost_episode_audio(episode_id: int):
         )
 
 
-def poll_feed(podcast_id: uuid.UUID):
+def poll_feed(podcast_id: uuid.UUID, download_all: bool = False):
     """Task to poll a podcast feed."""
     try:
         podcast = Podcast.objects.get(id=podcast_id)
         manager = FeedManager(podcast)
-        manager.poll()
+        manager.poll(download_all=download_all)
     except Podcast.DoesNotExist:
         logger.error("Podcast with ID %s not found. Aborting task.", podcast_id)
 

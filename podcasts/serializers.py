@@ -21,6 +21,7 @@ class PodcastSerializer(serializers.ModelSerializer):
 
     id = serializers.CharField(read_only=True)
     episodes = EpisodeSerializer(many=True, read_only=True)
+    download_all = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:
         model = Podcast

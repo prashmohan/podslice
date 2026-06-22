@@ -198,7 +198,7 @@ class OPMLBackupView(View):
         return response
 
 
-def create_podcast_from_url(rss_url: str) -> Podcast:
+def create_podcast_from_url(rss_url: str, download_all: bool = False) -> Podcast:
     """
     Parses an RSS feed, creates a Podcast object, and dispatches a background task.
     """
@@ -226,9 +226,16 @@ def create_podcast_from_url(rss_url: str) -> Podcast:
 
             artwork_url = feed.feed.get("image", {}).get("href")
 
+            defaults = {
+                "title": feed_title,
+                "artwork_url": artwork_url,
+            }
+            if download_all:
+                defaults["max_episodes"] = 0
+
             podcast, created = Podcast.objects.get_or_create(
                 rss_url=rss_url,
-                defaults={"title": feed_title, "artwork_url": artwork_url},
+                defaults=defaults,
             )
 
             if not created:
@@ -244,7 +251,11 @@ def create_podcast_from_url(rss_url: str) -> Podcast:
                 feed_title,
                 podcast.id,
             )
-            poll_thread = threading.Thread(target=poll_feed, args=(podcast.id,))
+            poll_thread = threading.Thread(
+                target=poll_feed,
+                args=(podcast.id,),
+                kwargs={"download_all": download_all}
+            )
             poll_thread.start()
             logger.debug(
                 "Polling task for Podcast ID %s dispatched successfully.", podcast.id
@@ -290,6 +301,7 @@ class PodcastSubscribeUIView(View):
         Handles POST requests and creates a new podcast subscription.
         """
         rss_url = request.POST.get("rss_url")
+        download_all = "download_all" in request.POST
         if not rss_url:
             podcasts = Podcast.objects.all()
             return render(
@@ -299,7 +311,7 @@ class PodcastSubscribeUIView(View):
             )
 
         try:
-            podcast = create_podcast_from_url(rss_url)
+            podcast = create_podcast_from_url(rss_url, download_all=download_all)
             return redirect(
                 reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id})
             )
@@ -432,8 +444,9 @@ class PodcastSubscriptionAPIView(generics.ListCreateAPIView):
         This method is called by DRF after validation and before saving the object.
         """
         rss_url = serializer.validated_data["rss_url"]
+        download_all = serializer.validated_data.get("download_all", False)
         try:
-            create_podcast_from_url(rss_url)
+            create_podcast_from_url(rss_url, download_all=download_all)
         except (ValueError, IOError) as e:
             raise serializers.ValidationError(
                 {"rss_url": [f"Could not fetch or parse the feed. Reason: {e}"]}

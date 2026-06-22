@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from podcasts.tests.test_base import PodcastTestCase
 from podcasts.apps import polling_loop, start_polling_thread
-from podcasts.models import Episode, Podcast
+from podcasts.models import Episode
 from podcasts.tasks import poll_feed, rehost_episode_audio, polling_locks
 
 
@@ -87,6 +87,40 @@ class PollingThreadTest(PodcastTestCase):
         mock_submit.assert_called_once_with(rehost_episode_audio, episode.id)
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.NEW)
+
+    @mock.patch("podcasts.tasks.DOWNLOAD_POOL.submit")
+    @mock.patch("podcasts.tasks.feedparser")
+    def test_poll_feed_download_all(self, mock_feedparser, mock_submit):
+        """Test that poll_feed with download_all=True processes all entries."""
+        # Ensure a clean slate for episodes before this test
+        Episode.objects.all().delete()
+
+        podcast = self.podcast
+        mock_feed = mock.Mock()
+        mock_feed.bozo = False
+
+        # Create 15 entries (greater than default limit of 5)
+        entries = []
+        for i in range(15):
+            entry = {
+                "id": f"guid-{i}",
+                "title": f"Episode {i}",
+                "enclosures": [{"href": f"http://example.com/audio-{i}.mp3", "type": "audio/mpeg"}],
+                "published_parsed": timezone.now().timetuple(),
+            }
+            entries.append(entry)
+
+        mock_feed.entries = entries
+        mock_feedparser.parse.return_value = mock_feed
+
+        # Run with download_all=True
+        podcast.max_episodes = 0
+        podcast.save()
+        poll_feed(podcast.id, download_all=True)
+
+        # Check that all 15 episodes were created
+        self.assertEqual(Episode.objects.filter(podcast=podcast).count(), 15)
+        self.assertEqual(mock_submit.call_count, 15)
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
