@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
@@ -26,7 +27,6 @@ from podcasts.tasks import (
     delete_podcast_data,
     poll_feed,
     rehost_episode_audio,
-    reprocess_podcast,
 )
 
 class EpisodeReprocessView(View):
@@ -48,14 +48,9 @@ class EpisodeReprocessView(View):
             except RehostedMedia.DoesNotExist:
                 pass
         episode.status = Episode.Status.NEW
-        episode.rehosted_media_id = None
         episode.rehosted_audio_size = 0
         episode.ad_segments = None
         episode.save()
-        reprocess_thread = threading.Thread(
-            target=rehost_episode_audio, args=(episode.id,)
-        )
-        reprocess_thread.start()
         return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": episode.podcast.id}))
 
 
@@ -423,10 +418,19 @@ class PodcastReprocessView(View):
         Handles POST requests and reprocesses a podcast.
         """
         podcast = get_object_or_404(Podcast, id=podcast_id)
-        reprocess_thread = threading.Thread(
-            target=reprocess_podcast, args=(podcast.id,)
-        )
-        reprocess_thread.start()
+        for episode in podcast.episodes.all():
+            if episode.rehosted_media_id:
+                try:
+                    media_item = RehostedMedia.objects.get(pk=episode.rehosted_media_id)
+                    if os.path.exists(media_item.file_path):
+                        os.remove(media_item.file_path)
+                    media_item.delete()
+                except RehostedMedia.DoesNotExist:
+                    pass
+            episode.status = Episode.Status.NEW
+            episode.rehosted_audio_size = 0
+            episode.ad_segments = None
+            episode.save()
         return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id}))
 
 
@@ -468,7 +472,7 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
         Handles GET requests and returns the re-hosted RSS feed.
         """
         podcast = self.get_object()
-        episodes = podcast.episodes.filter(status=Episode.Status.COMPLETE).order_by(
+        episodes = podcast.episodes.all().order_by(
             "-pub_date"
         )
 
@@ -518,6 +522,16 @@ class PodcastDeleteAPIView(generics.DestroyAPIView):
         logger.info("Dispatched deletion task for Podcast ID: %s", podcast_id)
 
 
+media_locks = {}
+media_locks_lock = threading.Lock()
+
+def get_media_lock(media_guid):
+    with media_locks_lock:
+        if media_guid not in media_locks:
+            media_locks[media_guid] = threading.Lock()
+        return media_locks[media_guid]
+
+
 def serve_rehosted_media(request, media_guid):
     """
     Serves a re-hosted audio file.
@@ -537,24 +551,81 @@ def serve_rehosted_media(request, media_guid):
     logger.info("Attempting to serve media for GUID: %s", media_guid)
     try:
         media_item = RehostedMedia.objects.get(pk=media_guid)
-        logger.info(
-            "Found RehostedMedia record for GUID %s. File path: %s",
-            media_guid,
-            media_item.file_path,
-        )
+        if os.path.exists(media_item.file_path):
+            logger.info(
+                "Found RehostedMedia record and file on disk for GUID %s. File path: %s",
+                media_guid,
+                media_item.file_path,
+            )
+            with open(media_item.file_path, "rb") as f:
+                buffer = io.BytesIO(f.read())
+            return FileResponse(buffer, content_type=media_item.content_type)
+    except RehostedMedia.DoesNotExist:
+        pass
+
+    episode = get_object_or_404(Episode, rehosted_media_id=media_guid)
+    lock = get_media_lock(media_guid)
+
+    acquired = False
+    try:
+        while True:
+            lock.acquire()
+            acquired = True
+            
+            episode.refresh_from_db()
+            status = episode.status
+            
+            if status == Episode.Status.COMPLETE:
+                lock.release()
+                acquired = False
+                break
+                
+            elif status in [Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING]:
+                lock.release()
+                acquired = False
+                time.sleep(2)
+                continue
+                
+            elif status in [Episode.Status.NEW, Episode.Status.FAILED]:
+                episode.status = Episode.Status.DOWNLOADING
+                episode.save(update_fields=["status"])
+                lock.release()
+                acquired = False
+                
+                # Run the processing synchronously
+                from podcasts.tasks import EpisodeProcessor
+                processor = EpisodeProcessor(episode)
+                processor.rehost_audio()
+                
+                episode.refresh_from_db()
+                if episode.status == Episode.Status.COMPLETE:
+                    break
+                else:
+                    logger.error("Processing failed for episode %s, status is %s", episode.title, episode.status)
+                    raise Http404("Audio processing failed for this episode.")
+            else:
+                lock.release()
+                acquired = False
+                raise Http404("Invalid episode status.")
+    finally:
+        if acquired:
+            lock.release()
+
+    try:
+        media_item = RehostedMedia.objects.get(pk=media_guid)
     except RehostedMedia.DoesNotExist as e:
         logger.error(
-            "RehostedMedia record not found in database for GUID: %s", media_guid
+            "RehostedMedia record not found in database for GUID after processing: %s", media_guid
         )
         raise Http404("Media file record not found in the database.") from e
 
     if not os.path.exists(media_item.file_path):
         logger.error(
-            "Media file not found on disk for GUID %s. Path: %s",
+            "Media file not found on disk for GUID %s after processing. Path: %s",
             media_guid,
             media_item.file_path,
         )
-        raise Http404("The media file is registered but was not found on disk.")
+        raise Http404("The media file was registered but not found on disk.")
 
     logger.info("Serving file %s for GUID %s", media_item.file_path, media_guid)
     try:
@@ -562,7 +633,7 @@ def serve_rehosted_media(request, media_guid):
             buffer = io.BytesIO(f.read())
         response = FileResponse(buffer, content_type=media_item.content_type)
     except FileNotFoundError as e:
-        raise Http404("The media file is registered but was not found on disk.") from e
+        raise Http404("The media file was registered but not found on disk.") from e
     return response
 
 

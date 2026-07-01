@@ -10,6 +10,8 @@ services:
       - media_volume:/app/media
       - db_volume:/app/db
     command: gunicorn --bind 0.0.0.0:8000 podslice.wsgi:application
+    restart: unless-stopped  # Common choice for production-like services
+
 
   web:
     image: nginx:latest
@@ -22,6 +24,8 @@ services:
       - media_volume:/app/media
     depends_on:
       - app
+    restart: unless-stopped  # Common choice for production-like services
+          
 
 volumes:
   static_volume:

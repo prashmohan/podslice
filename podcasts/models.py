@@ -83,6 +83,7 @@ class Episode(models.Model):
         default=0, help_text="Size of the rehosted audio file in bytes."
     )
     rehosted_media_id = models.UUIDField(
+        default=uuid.uuid4,
         null=True,
         blank=True,
         help_text="ID of the rehosted media in the rehost_app database.",

@@ -829,7 +829,6 @@ class FeedManager:
                 return
 
             self._process_feed_entries(feed, episodes_to_process, download_all=download_all)
-            self._dispatch_rehosting_tasks(episodes_to_process)
             self._enforce_episode_limit()
         finally:
             lock.release()
@@ -845,14 +844,11 @@ class FeedManager:
             logger.info("Resetting episode '%s' for reprocessing.", episode.title)
             self._delete_episode_media(episode)
             episode.status = Episode.Status.NEW
-            episode.rehosted_media_id = None
             episode.rehosted_audio_size = 0
             episode.ad_segments = None
             episode.save()
-            DOWNLOAD_POOL.submit(rehost_episode_audio, episode.id)
-            logger.info("Dispatched re-hosting task for episode '%s'.", episode.title)
         logger.info(
-            "Completed dispatching reprocessing tasks for all episodes of podcast '%s'.",
+            "Completed resetting all episodes of podcast '%s' for reprocessing on-demand.",
             self.podcast.title,
         )
 

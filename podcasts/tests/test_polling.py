@@ -84,7 +84,7 @@ class PollingThreadTest(PodcastTestCase):
 
         poll_feed(podcast.id)
 
-        mock_submit.assert_called_once_with(rehost_episode_audio, episode.id)
+        mock_submit.assert_not_called()
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.NEW)
 
@@ -120,7 +120,7 @@ class PollingThreadTest(PodcastTestCase):
 
         # Check that all 15 episodes were created
         self.assertEqual(Episode.objects.filter(podcast=podcast).count(), 15)
-        self.assertEqual(mock_submit.call_count, 15)
+        mock_submit.assert_not_called()
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))

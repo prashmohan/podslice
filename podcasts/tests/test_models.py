@@ -1,7 +1,6 @@
 """
 Tests for the models in the podcasts app.
 """
-import uuid
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -28,13 +27,10 @@ class EpisodeModelTest(TestCase):
             original_audio_url="http://example.com/episode.mp3",
             pub_date="2025-07-20T12:00:00Z",
         )
-        self.assertIsNone(episode.rehosted_audio_url)
+        self.assertIsNotNone(episode.rehosted_audio_url)
+        self.assertIsNotNone(episode.rehosted_media_id)
 
-        media_guid = uuid.uuid4()
-        episode.rehosted_media_id = media_guid
-        episode.save()
-
-        expected_url = f"http://localhost:12343{reverse('serve_media_episode', kwargs={'media_guid': media_guid})}"
+        expected_url = f"http://localhost:12343{reverse('serve_media_episode', kwargs={'media_guid': episode.rehosted_media_id})}"
         self.assertEqual(episode.rehosted_audio_url, expected_url)
 
 
