@@ -595,7 +595,7 @@ def serve_rehosted_media(request, media_guid):
                 # Run the processing synchronously
                 from podcasts.tasks import EpisodeProcessor
                 processor = EpisodeProcessor(episode)
-                processor.rehost_audio()
+                processor.rehost_audio(force=True)
                 
                 episode.refresh_from_db()
                 if episode.status == Episode.Status.COMPLETE:

@@ -503,11 +503,11 @@ class EpisodeProcessor:
             )
             self._save_processed_audio(media_guid, final_audio_path, file_size)
 
-    def rehost_audio(self):
+    def rehost_audio(self, force=False):
         """Main method to process and re-host the audio for an episode."""
         audio_path = None
         try:
-            if self.episode.status in [
+            if not force and self.episode.status in [
                 Episode.Status.DOWNLOADING,
                 Episode.Status.ANALYZING,
                 Episode.Status.PROCESSING,

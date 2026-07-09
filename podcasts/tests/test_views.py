@@ -213,7 +213,7 @@ class PodcastViewsTest(TestCase):
             pub_date=timezone.now(),
         )
         
-        def mock_rehost():
+        def mock_rehost(*args, **kwargs):
             episode.status = Episode.Status.COMPLETE
             episode.save()
             from podcasts.models import RehostedMedia
@@ -305,7 +305,7 @@ class PodcastViewsConcurrencyTest(TransactionTestCase):
         call_count = 0
         call_count_lock = threading.Lock()
 
-        def mock_rehost():
+        def mock_rehost(*args, **kwargs):
             nonlocal call_count
             with call_count_lock:
                 call_count += 1
