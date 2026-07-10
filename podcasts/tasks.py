@@ -420,7 +420,7 @@ class EpisodeProcessor:
             "No ad segments to slice for '%s'. Saving original audio.",
             self.episode.title,
         )
-        media_guid = uuid.uuid4()
+        media_guid = self.episode.rehosted_media_id or uuid.uuid4()
         media_dir = settings.MEDIA_ROOT
         final_audio_path = os.path.join(media_dir, f"{media_guid}.mp3")
         os.rename(audio_path, final_audio_path)
@@ -433,7 +433,7 @@ class EpisodeProcessor:
             "Ad segments covered the entire audio for '%s'. Result will be an empty file.",
             self.episode.title,
         )
-        media_guid = uuid.uuid4()
+        media_guid = self.episode.rehosted_media_id or uuid.uuid4()
         media_dir = settings.MEDIA_ROOT
         final_audio_path = os.path.join(media_dir, f"{media_guid}.mp3")
         ffmpeg_cmd = [
@@ -495,7 +495,7 @@ class EpisodeProcessor:
                 self.episode.title,
                 filter_complex,
             )
-            media_guid = uuid.uuid4()
+            media_guid = self.episode.rehosted_media_id or uuid.uuid4()
             media_dir = settings.MEDIA_ROOT
             final_audio_path = os.path.join(media_dir, f"{media_guid}.mp3")
             file_size = self._run_ffmpeg_slicing(

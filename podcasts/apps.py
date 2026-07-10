@@ -81,4 +81,19 @@ class PodcastsConfig(AppConfig):
         if "runserver" in sys.argv and os.environ.get("RUN_MAIN") != "true":
             return
 
+        # Reset any stuck/in-progress episodes to NEW on startup/reload
+        from podcasts.models import Episode
+        try:
+            stuck_count = Episode.objects.filter(
+                status__in=[
+                    Episode.Status.DOWNLOADING,
+                    Episode.Status.ANALYZING,
+                    Episode.Status.PROCESSING,
+                ]
+            ).update(status=Episode.Status.NEW)
+            if stuck_count > 0:
+                logger.info("Reset %d in-progress/stuck episodes to NEW on startup.", stuck_count)
+        except Exception as e:
+            logger.error("Failed to reset stuck episodes on startup: %s", e)
+
         start_polling_thread()

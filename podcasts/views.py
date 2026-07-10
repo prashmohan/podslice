@@ -581,6 +581,21 @@ def serve_rehosted_media(request, media_guid):
                 break
                 
             elif status in [Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING]:
+                from django.utils import timezone
+                # Check if it has been stuck for more than 2 minutes
+                if timezone.now() - episode.updated_at > timezone.timedelta(minutes=2):
+                    logger.warning(
+                        "Episode %s has been in status %s since %s (stuck). Resetting to NEW.",
+                        episode.title,
+                        status,
+                        episode.updated_at,
+                    )
+                    episode.status = Episode.Status.NEW
+                    episode.save(update_fields=["status"])
+                    lock.release()
+                    acquired = False
+                    continue
+
                 lock.release()
                 acquired = False
                 time.sleep(2)
