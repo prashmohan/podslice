@@ -1,14 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
     <channel>
         <title>{{ podcast.title }} (Ad-Free)</title>
         <link>{{ rehosted_rss_url }}</link>
         <atom:link href="{{ rehosted_rss_url }}" rel="self" type="application/rss+xml" />
-        <description>An ad-free version of {{ podcast.title }} re-hosted by Podslice.</description>
+        <description>{{ podcast.description|default:"An ad-free version of the podcast re-hosted by Podslice." }}</description>
         <language>en-us</language>
         <lastBuildDate>{{ build_date }}</lastBuildDate>
+        <itunes:author>{{ podcast.author|default:"Podslice" }}</itunes:author>
+        <itunes:summary>{{ podcast.description|default:"An ad-free version of the podcast re-hosted by Podslice." }}</itunes:summary>
+        <itunes:subtitle>Ad-free version of {{ podcast.title }}</itunes:subtitle>
         {% if podcast.artwork_url %}
-        <itunes:image href="{{ podcast.artwork_url }}" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"/>
+        <itunes:image href="{{ podcast.artwork_url }}"/>
         {% endif %}
 
         {% for episode in episodes %}
@@ -19,6 +22,14 @@
             <pubDate>{{ episode.pub_date|date:"D, d M Y H:i:s O" }}</pubDate>
             <description>Ad-free version of {{ episode.title }}</description>
             <enclosure url="{{ episode.rehosted_audio_url }}" length="{{ episode.rehosted_audio_size }}" type="audio/mpeg" />
+            <itunes:author>{{ podcast.author|default:"Podslice" }}</itunes:author>
+            <itunes:summary>Ad-free version of {{ episode.title }}</itunes:summary>
+            {% if episode.duration_seconds %}
+            <itunes:duration>{{ episode.duration_seconds }}</itunes:duration>
+            {% endif %}
+            {% if podcast.artwork_url %}
+            <itunes:image href="{{ podcast.artwork_url }}"/>
+            {% endif %}
         </item>
         {% endfor %}
     </channel>
