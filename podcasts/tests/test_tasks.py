@@ -478,3 +478,112 @@ class EpisodeRetentionTest(PodcastTestCase):
 
         self.assertEqual(self.podcast.episodes.count(), 5)
         self.assertEqual(mock_delete_media.call_count, 5)
+
+
+class AdditionalTasksTest(PodcastTestCase):
+    """
+    Test cases for previously untested tasks and FeedManager edge cases.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.feed_manager = FeedManager(self.podcast)
+
+    @mock.patch("podcasts.tasks.FeedManager._delete_episode_media")
+    def test_reprocess_podcast(self, mock_delete_media):
+        """
+        Test that reprocessing a podcast resets all episodes and clears their media.
+        """
+        # Create an episode that is COMPLETE
+        episode = Episode.objects.create(
+            podcast=self.podcast,
+            title="Complete Episode",
+            guid="comp-123",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+            rehosted_audio_size=9999,
+            rehosted_media_id=self.episode.rehosted_media_id
+        )
+
+        from podcasts.tasks import reprocess_podcast
+        reprocess_podcast(self.podcast.id)
+
+        # Both self.episode and the new complete episode should be reset to NEW
+        self.episode.refresh_from_db()
+        episode.refresh_from_db()
+
+        self.assertEqual(self.episode.status, Episode.Status.NEW)
+        self.assertEqual(self.episode.rehosted_audio_size, 0)
+        self.assertIsNone(self.episode.ad_segments)
+
+        self.assertEqual(episode.status, Episode.Status.NEW)
+        self.assertEqual(episode.rehosted_audio_size, 0)
+        self.assertIsNone(episode.ad_segments)
+
+        # _delete_episode_media should be called for both episodes
+        self.assertEqual(mock_delete_media.call_count, 2)
+
+    def test_reprocess_podcast_not_found(self):
+        """
+        Test that reprocess_podcast handles a non-existent podcast ID without crashing.
+        """
+        from podcasts.tasks import reprocess_podcast
+        import uuid
+        # Should log an error but not raise any exception
+        reprocess_podcast(uuid.uuid4())
+
+    def test_get_episodes_to_process_stuck_threshold(self):
+        """
+        Test that _get_episodes_to_process resets failed and stuck episodes correctly.
+        """
+        # Clean slate
+        Episode.objects.all().delete()
+
+        # 1. Failed episode -> should be reset to NEW
+        failed_ep = Episode.objects.create(
+            podcast=self.podcast,
+            title="Failed Episode",
+            guid="fail-1",
+            pub_date=timezone.now(),
+            status=Episode.Status.FAILED
+        )
+
+        # 2. Stuck episode (> 1 hour in DOWNLOADING) -> should be reset to NEW
+        stuck_time = timezone.now() - timezone.timedelta(hours=2)
+        stuck_ep = Episode.objects.create(
+            podcast=self.podcast,
+            title="Stuck Episode",
+            guid="stuck-1",
+            pub_date=timezone.now(),
+            status=Episode.Status.DOWNLOADING
+        )
+        Episode.objects.filter(id=stuck_ep.id).update(updated_at=stuck_time)
+
+        # 3. Not stuck episode (10 minutes in DOWNLOADING) -> should NOT be reset
+        recent_time = timezone.now() - timezone.timedelta(minutes=10)
+        recent_ep = Episode.objects.create(
+            podcast=self.podcast,
+            title="Recent Episode",
+            guid="recent-1",
+            pub_date=timezone.now(),
+            status=Episode.Status.DOWNLOADING
+        )
+        Episode.objects.filter(id=recent_ep.id).update(updated_at=recent_time)
+
+        # Run method
+        ep_ids = self.feed_manager._get_episodes_to_process()
+
+        failed_ep.refresh_from_db()
+        stuck_ep.refresh_from_db()
+        recent_ep.refresh_from_db()
+
+        # Verify statuses
+        self.assertEqual(failed_ep.status, Episode.Status.NEW)
+        self.assertEqual(stuck_ep.status, Episode.Status.NEW)
+        self.assertEqual(recent_ep.status, Episode.Status.DOWNLOADING)
+
+        # Verify returned set includes failed and stuck, but not recent
+        self.assertIn(failed_ep.id, ep_ids)
+        self.assertIn(stuck_ep.id, ep_ids)
+        self.assertNotIn(recent_ep.id, ep_ids)
+

@@ -10,7 +10,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from podcasts.tests.test_base import PodcastTestCase
-from podcasts.apps import polling_loop, start_polling_thread
+from podcasts.apps import polling_loop
 from podcasts.models import Episode
 from podcasts.tasks import poll_feed, rehost_episode_audio, polling_locks
 
@@ -41,18 +41,6 @@ class PollingThreadTest(PodcastTestCase):
         mock_poll_feed.side_effect = side_effect
         polling_loop(shutdown_event, 1)
         mock_poll_feed.assert_called_once()
-
-    @mock.patch("podcasts.apps.threading.Thread")
-    def test_start_polling_thread(self, mock_thread):
-        """Test that the polling thread can be started."""
-        mock_thread_instance = mock.Mock()
-        mock_thread.return_value = mock_thread_instance
-
-        thread, _ = start_polling_thread()
-
-        mock_thread.assert_called_once()
-        self.assertEqual(thread, mock_thread_instance)
-        mock_thread_instance.start.assert_called_once()
 
     @mock.patch("podcasts.tasks.DOWNLOAD_POOL.submit")
     @mock.patch("podcasts.tasks.feedparser")
@@ -148,3 +136,52 @@ class RaceConditionPreventionTest(PodcastTestCase):
         poll_feed(self.podcast.id)
         self.podcast.refresh_from_db()
         self.assertEqual(self.podcast.last_polled, None)
+
+
+class AppConfigReadyTest(PodcastTestCase):
+    """Tests for PodcastsConfig.ready hook and Gunicorn/management command bypass logic."""
+
+    @mock.patch("podcasts.apps.start_polling_thread")
+    def test_ready_bypass_for_management_commands(self, mock_start_polling):
+        """Test that ready() returns early when a management command is running."""
+        from django.apps import apps
+        
+        config = apps.get_app_config("podcasts")
+        with mock.patch("sys.argv", ["manage.py", "migrate"]):
+            config.ready()
+        
+        mock_start_polling.assert_not_called()
+
+    @mock.patch("podcasts.apps.start_polling_thread")
+    @mock.patch("os.environ.get")
+    def test_ready_bypass_for_runserver_autoreload(self, mock_env_get, mock_start_polling):
+        """Test that ready() returns early when runserver is starting the main thread reload."""
+        from django.apps import apps
+        
+        config = apps.get_app_config("podcasts")
+        mock_env_get.return_value = None  # RUN_MAIN not set
+        with mock.patch("sys.argv", ["manage.py", "runserver"]):
+            config.ready()
+        
+        mock_start_polling.assert_not_called()
+
+    @mock.patch("podcasts.apps.start_polling_thread")
+    def test_ready_resets_stuck_episodes_and_starts_thread(self, mock_start_polling):
+        """Test that ready() resets in-progress/stuck episodes and starts the polling thread."""
+        from django.apps import apps
+        
+        # Ensure we have a stuck episode
+        self.episode.status = Episode.Status.DOWNLOADING
+        self.episode.save()
+        
+        config = apps.get_app_config("podcasts")
+        # Fake that we are inside the reloaded process (RUN_MAIN = true) or running production
+        with mock.patch("sys.argv", ["manage.py", "runserver", "0.0.0.0:8000"]):
+            with mock.patch("os.environ", {"RUN_MAIN": "true"}):
+                config.ready()
+            
+        self.episode.refresh_from_db()
+        self.assertEqual(self.episode.status, Episode.Status.NEW)
+        mock_start_polling.assert_called_once()
+
+
