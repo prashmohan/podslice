@@ -2,16 +2,14 @@
 Tests for the newly added features: Duration ingestion, iTunes RSS metadata compliance, and HTTP conditional caching.
 """
 import os
-import hashlib
 from unittest import mock
 from django.conf import settings
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.http import http_date
 
 from podcasts.tests.test_base import PodcastTestCase
-from podcasts.models import Episode, Podcast
+from podcasts.models import Episode
 from podcasts.views import create_podcast_from_url
 
 
@@ -38,7 +36,7 @@ class NewFeaturesTest(PodcastTestCase):
         mock_parse.return_value = mock_feed
 
         # Run creation
-        with mock.patch("podcasts.views.poll_feed") as mock_poll:
+        with mock.patch("podcasts.views.poll_feed"):
             podcast = create_podcast_from_url("http://example.com/feed-new.xml")
 
         self.assertEqual(podcast.title, "New Podcast Feed")
