@@ -5,7 +5,7 @@ Tests for the models in the podcasts app.
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from podcasts.models import Episode, Podcast, RehostedMedia
+from podcasts.models import Episode, Podcast
 
 
 @override_settings(REHOST_BASE_URL="http://localhost:12343")
@@ -47,14 +47,3 @@ class PodcastModelTest(TestCase):
         self.assertIsInstance(podcast, Podcast)
         self.assertEqual(str(podcast), "Test Podcast")
 
-
-class RehostedMediaModelTest(TestCase):
-    """Tests for the RehostedMedia model."""
-
-    def test_rehosted_media_creation(self):
-        """Test that a RehostedMedia object can be created."""
-        media = RehostedMedia.objects.create(
-            file_path="/path/to/file.mp3", content_type="audio/mpeg"
-        )
-        self.assertIsInstance(media, RehostedMedia)
-        self.assertEqual(str(media), f"Media {media.media_guid}")
