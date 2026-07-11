@@ -799,7 +799,15 @@ class FeedManager:
                 logger.info("Deleted old episode: '%s'", episode.title)
 
     def _dispatch_rehosting_tasks(self, episode_ids: set):
-        """Dispatches re-hosting tasks for the given episode IDs."""
+        """
+        Dispatches re-hosting tasks for the given episode IDs.
+
+        NOTE: This method is intentionally NOT called at the end of the poll() loop.
+        Instead of processing new episodes as soon as they are detected, they are processed
+        strictly on-demand when the client plays them. This is a design choice to conserve
+        Gemini AI tokens and credits, as the user may not listen to every episode that is
+        published to the feed.
+        """
         for episode_id in episode_ids:
             logger.info("Dispatching re-hosting task for episode ID '%s'.", episode_id)
             DOWNLOAD_POOL.submit(rehost_episode_audio, episode_id)
