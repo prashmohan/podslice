@@ -21,6 +21,12 @@ class Podcast(models.Model):
         unique=True, help_text="The unique URL of the podcast's RSS feed."
     )
     artwork_url = models.URLField(blank=True, null=True)
+    author = models.CharField(
+        max_length=255, blank=True, null=True, help_text="Author of the podcast."
+    )
+    description = models.TextField(
+        blank=True, null=True, help_text="Description of the podcast."
+    )
     last_polled = models.DateTimeField(null=True, blank=True)
     max_episodes = models.PositiveIntegerField(
         default=10,
@@ -87,6 +93,9 @@ class Episode(models.Model):
         null=True,
         blank=True,
         help_text="ID of the rehosted media in the rehost_app database.",
+    )
+    duration_seconds = models.PositiveIntegerField(
+        null=True, blank=True, help_text="Duration of the rehosted audio file in seconds."
     )
     ad_segments = models.JSONField(null=True, blank=True)
     status = models.CharField(
