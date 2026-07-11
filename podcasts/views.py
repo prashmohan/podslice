@@ -483,6 +483,7 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
         from django.utils.http import http_date
         import hashlib
         from django.utils import timezone
+        from datetime import timezone as datetime_timezone
 
         # Find the latest episode's updated_at or fallback to last_polled
         last_episode = episodes.order_by("-updated_at").first()
@@ -490,9 +491,9 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
 
         if last_modified:
             if timezone.is_naive(last_modified):
-                last_modified = timezone.make_aware(last_modified, timezone.utc)
+                last_modified = timezone.make_aware(last_modified, datetime_timezone.utc)
             else:
-                last_modified = last_modified.astimezone(timezone.utc)
+                last_modified = last_modified.astimezone(datetime_timezone.utc)
             last_modified_str = http_date(last_modified.timestamp())
             etag_src = f"{podcast.id}:{last_modified.isoformat()}"
             etag = f'"{hashlib.md5(etag_src.encode("utf-8")).hexdigest()}"'
