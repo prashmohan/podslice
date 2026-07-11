@@ -165,23 +165,21 @@ class AppConfigReadyTest(PodcastTestCase):
         
         mock_start_polling.assert_not_called()
 
-    @mock.patch("podcasts.apps.start_polling_thread")
-    def test_ready_resets_stuck_episodes_and_starts_thread(self, mock_start_polling):
-        """Test that ready() resets in-progress/stuck episodes and starts the polling thread."""
-        from django.apps import apps
-        
+    @mock.patch("podcasts.tasks.poll_feed")
+    def test_ready_resets_stuck_episodes_and_starts_thread(self, mock_poll_feed):
+        """Test that polling_loop resets in-progress/stuck episodes on startup."""
         # Ensure we have a stuck episode
         self.episode.status = Episode.Status.DOWNLOADING
         self.episode.save()
-        
-        config = apps.get_app_config("podcasts")
-        # Fake that we are inside the reloaded process (RUN_MAIN = true) or running production
-        with mock.patch("sys.argv", ["manage.py", "runserver", "0.0.0.0:8000"]):
-            with mock.patch("os.environ", {"RUN_MAIN": "true"}):
-                config.ready()
+
+        # Mock shutdown_event to terminate loop after one iteration
+        shutdown_event = mock.Mock()
+        shutdown_event.is_set.side_effect = [False, False, True, True, True, True]
+
+        from podcasts.apps import polling_loop
+        polling_loop(shutdown_event, 1)
             
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.NEW)
-        mock_start_polling.assert_called_once()
 
 

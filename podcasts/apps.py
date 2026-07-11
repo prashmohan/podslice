@@ -19,8 +19,22 @@ def polling_loop(shutdown_event: threading.Event, polling_interval: int):
         shutdown_event: Event to signal thread shutdown.
         polling_interval: The interval in seconds between polling runs.
     """
-    from podcasts.models import Podcast
+    from podcasts.models import Podcast, Episode
     from podcasts.tasks import poll_feed
+
+    # Reset any stuck/in-progress episodes to NEW on startup/reload
+    try:
+        stuck_count = Episode.objects.filter(
+            status__in=[
+                Episode.Status.DOWNLOADING,
+                Episode.Status.ANALYZING,
+                Episode.Status.PROCESSING,
+            ]
+        ).update(status=Episode.Status.NEW)
+        if stuck_count > 0:
+            logger.info("Reset %d in-progress/stuck episodes to NEW on startup.", stuck_count)
+    except Exception as e:
+        logger.error("Failed to reset stuck episodes on startup: %s", e)
 
     while not shutdown_event.is_set():
         logger.info("Polling for new episodes...")
@@ -80,20 +94,5 @@ class PodcastsConfig(AppConfig):
         # Also avoid starting multiple threads when using runserver with auto-reload
         if "runserver" in sys.argv and os.environ.get("RUN_MAIN") != "true":
             return
-
-        # Reset any stuck/in-progress episodes to NEW on startup/reload
-        from podcasts.models import Episode
-        try:
-            stuck_count = Episode.objects.filter(
-                status__in=[
-                    Episode.Status.DOWNLOADING,
-                    Episode.Status.ANALYZING,
-                    Episode.Status.PROCESSING,
-                ]
-            ).update(status=Episode.Status.NEW)
-            if stuck_count > 0:
-                logger.info("Reset %d in-progress/stuck episodes to NEW on startup.", stuck_count)
-        except Exception as e:
-            logger.error("Failed to reset stuck episodes on startup: %s", e)
 
         start_polling_thread()
