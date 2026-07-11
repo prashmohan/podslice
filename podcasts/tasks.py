@@ -879,17 +879,16 @@ class FeedManager:
         )
 
 
-def rehost_episode_audio(episode_id: int):
+def rehost_episode_audio(episode_id: int, force: bool = False):
     """Task to re-host the audio for a single episode."""
     try:
         episode = Episode.objects.select_related("podcast").get(id=episode_id)
         processor = EpisodeProcessor(episode)
-        processor.rehost_audio()
+        processor.rehost_audio(force=force)
     except Episode.DoesNotExist:
         logger.error(
-            "Episode with ID %s (%s)not found. Aborting rehost task.",
+            "Episode with ID %s not found. Aborting rehost task.",
             episode_id,
-            episode.title,
         )
 
 
