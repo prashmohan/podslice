@@ -220,10 +220,14 @@ def create_podcast_from_url(rss_url: str, download_all: bool = False) -> Podcast
             logger.debug("Feed '%s' parsed successfully.", feed_title)
 
             artwork_url = feed.feed.get("image", {}).get("href")
+            feed_author = feed.feed.get("author") or feed.feed.get("publisher") or ""
+            feed_description = feed.feed.get("description") or feed.feed.get("summary") or ""
 
             defaults = {
                 "title": feed_title,
                 "artwork_url": artwork_url,
+                "author": feed_author,
+                "description": feed_description,
             }
             if download_all:
                 defaults["max_episodes"] = 0

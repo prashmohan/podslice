@@ -224,14 +224,19 @@ class EpisodeProcessor:
             os.remove(final_audio_path)
             raise
 
+        duration_sec = self._get_audio_duration(final_audio_path)
+        duration_seconds = int(round(duration_sec)) if duration_sec is not None else None
+
         self.episode.rehosted_audio_size = file_size
         self.episode.rehosted_media_id = media_entry.media_guid
+        self.episode.duration_seconds = duration_seconds
         self._update_status(Episode.Status.COMPLETE, save=False)
 
         Episode.objects.filter(id=self.episode.id).update(
             status=Episode.Status.COMPLETE,
             rehosted_audio_size=file_size,
             rehosted_media_id=media_entry.media_guid,
+            duration_seconds=duration_seconds,
         )
         logger.info(
             "Rehost completed successfully for Episode '%s' (%s).",
