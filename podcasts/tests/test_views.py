@@ -2,12 +2,9 @@
 Tests for the podcast views.
 """
 import os
-import threading
-import time
 from unittest import mock
 
 from django.conf import settings
-from django.db import connection
 from django.test import TestCase, override_settings, TransactionTestCase
 from podcasts.tests.test_base import PodcastTestCase
 from django.urls import reverse

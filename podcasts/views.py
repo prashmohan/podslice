@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import threading
-import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
