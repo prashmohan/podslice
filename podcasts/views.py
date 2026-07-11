@@ -480,15 +480,50 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
             "-pub_date"
         )
 
+        from django.utils.http import http_date
+        import hashlib
+        from django.utils import timezone
+
+        # Find the latest episode's updated_at or fallback to last_polled
+        last_episode = episodes.order_by("-updated_at").first()
+        last_modified = last_episode.updated_at if last_episode else podcast.last_polled
+
+        if last_modified:
+            if timezone.is_naive(last_modified):
+                last_modified = timezone.make_aware(last_modified, timezone.utc)
+            else:
+                last_modified = last_modified.astimezone(timezone.utc)
+            last_modified_str = http_date(last_modified.timestamp())
+            etag_src = f"{podcast.id}:{last_modified.isoformat()}"
+            etag = f'"{hashlib.md5(etag_src.encode("utf-8")).hexdigest()}"'
+        else:
+            last_modified_str = None
+            etag = f'"{podcast.id}"'
+
+        # Check conditional headers
+        if_none_match = request.META.get("HTTP_IF_NONE_MATCH")
+        if_modified_since = request.META.get("HTTP_IF_MODIFIED_SINCE")
+
+        if if_none_match == etag:
+            return HttpResponse(status=304)
+
+        if not if_none_match and if_modified_since and last_modified_str and if_modified_since == last_modified_str:
+            return HttpResponse(status=304)
+
         context = {
             "podcast": podcast,
             "episodes": episodes,
-            "build_date": datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
+            "build_date": timezone.now().strftime("%a, %d %b %Y %H:%M:%S %z"),
             "rehost_base_url": settings.REHOST_BASE_URL,
             "rehosted_rss_url": f"{settings.REHOST_BASE_URL}{reverse('podcast-rss-feed-api', args=[podcast.id])}",
         }
         rss_feed = render_to_string("podcasts/rss_feed_template.xml", context)
-        return HttpResponse(rss_feed, content_type="application/xml")
+        response = HttpResponse(rss_feed, content_type="application/xml")
+        
+        if last_modified_str:
+            response["Last-Modified"] = last_modified_str
+        response["ETag"] = etag
+        return response
 
 
 class PodcastStatusAPIView(generics.RetrieveAPIView):
