@@ -201,10 +201,10 @@ class PodcastViewsTest(TestCase):
         self.assertEqual(episode.status, Episode.Status.NEW)
         self.assertEqual(episode.rehosted_media_id, old_uuid)
 
-    @mock.patch("podcasts.tasks.EpisodeProcessor")
-    def test_serve_rehosted_media_new_status_success(self, mock_processor_class):
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_serve_rehosted_media_new_status_success(self, mock_thread_class):
         """
-        Test that accessing a NEW status episode triggers rehost_audio synchronously.
+        Test that accessing a NEW status episode triggers background rehosting and returns 202.
         """
         episode = self.podcast.episodes.create(
             title="On Demand Episode",
@@ -213,32 +213,20 @@ class PodcastViewsTest(TestCase):
             status=Episode.Status.NEW,
             pub_date=timezone.now(),
         )
-        
-        def mock_rehost(*args, **kwargs):
-            episode.status = Episode.Status.COMPLETE
-            episode.save()
-            from podcasts.models import RehostedMedia
-            media_item = RehostedMedia.objects.create(
-                media_guid=episode.rehosted_media_id,
-                file_path=os.path.join(settings.MEDIA_ROOT, "test.mp3"),
-                content_type="audio/mpeg"
-            )
-            os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
-            with open(media_item.file_path, "wb") as f:
-                f.write(b"fake audio data")
 
-        mock_processor_instance = mock.Mock()
-        mock_processor_instance.rehost_audio.side_effect = mock_rehost
-        mock_processor_class.return_value = mock_processor_instance
+        mock_thread_instance = mock.Mock()
+        mock_thread_class.return_value = mock_thread_instance
 
         url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.getvalue(), b"fake audio data")
         
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get("Retry-After"), "30")
+        self.assertIn(b"Episode processing has been initiated", response.content)
+
         episode.refresh_from_db()
-        self.assertEqual(episode.status, Episode.Status.COMPLETE)
-        mock_processor_class.assert_called_once_with(episode)
+        self.assertEqual(episode.status, Episode.Status.DOWNLOADING)
+        mock_thread_class.assert_called_once()
 
     def test_serve_rehosted_media_complete_status(self):
         """
@@ -270,7 +258,7 @@ class PodcastViewsTest(TestCase):
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
 class PodcastViewsConcurrencyTest(TransactionTestCase):
     """
-    Concurrency tests for serve_rehosted_media.
+    Non-blocking / Concurrency tests for serve_rehosted_media.
     """
 
     def setUp(self):
@@ -283,10 +271,11 @@ class PodcastViewsConcurrencyTest(TransactionTestCase):
                 os.remove(os.path.join(media_root, f))
             os.rmdir(media_root)
 
-    @mock.patch("podcasts.tasks.EpisodeProcessor")
-    def test_serve_rehosted_media_concurrency(self, mock_processor_class):
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_serve_rehosted_media_concurrency(self, mock_thread_class):
         """
-        Test that concurrent requests to serve a NEW episode block and only trigger processing once.
+        Test that accessing a NEW episode triggers processing and returns 202,
+        and subsequent requests during processing also return 202 immediately.
         """
         podcast = Podcast.objects.create(
             title="Concurrent Podcast", rss_url="http://example.com/feed.xml"
@@ -299,78 +288,18 @@ class PodcastViewsConcurrencyTest(TransactionTestCase):
             pub_date=timezone.now(),
         )
 
-        import queue
-        
-        rehost_start_event = threading.Event()
-        rehost_finish_event = threading.Event()
-        call_count = 0
-        call_count_lock = threading.Lock()
-
-        def mock_rehost(*args, **kwargs):
-            nonlocal call_count
-            with call_count_lock:
-                call_count += 1
-            rehost_start_event.set()
-            rehost_finish_event.wait(timeout=10)
-            
-            episode.status = Episode.Status.COMPLETE
-            episode.save()
-            from podcasts.models import RehostedMedia
-            media_item = RehostedMedia.objects.create(
-                media_guid=episode.rehosted_media_id,
-                file_path=os.path.join(settings.MEDIA_ROOT, "concurrent.mp3"),
-                content_type="audio/mpeg"
-            )
-            os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
-            with open(media_item.file_path, "wb") as f:
-                f.write(b"concurrent audio")
-
-        mock_processor_instance = mock.Mock()
-        mock_processor_instance.rehost_audio.side_effect = mock_rehost
-        mock_processor_class.return_value = mock_processor_instance
-
         url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
         
-        results = queue.Queue()
+        # Request 1: should initiate processing and return 202
+        response1 = self.client.get(url)
+        self.assertEqual(response1.status_code, 202)
+        mock_thread_class.assert_called_once()
 
-        def make_request():
-            connection.close()
-            try:
-                response = self.client.get(url)
-                results.put((response.status_code, response.getvalue()))
-            except Exception as e:
-                results.put(e)
-            finally:
-                connection.close()
-
-        # Start first thread (which will trigger rehost and wait)
-        t1 = threading.Thread(target=make_request)
-        t1.start()
-
-        # Wait for the rehost to start
-        rehost_start_event.wait(timeout=5)
-
-        # Start second thread (which should enter the sleep-and-poll loop since status is DOWNLOADING)
-        t2 = threading.Thread(target=make_request)
-        t2.start()
-
-        # Let some time pass to ensure the second thread has entered the loop and polled
-        time.sleep(1)
-
-        # Let the rehost finish
-        rehost_finish_event.set()
-
-        # Wait for both threads to finish
-        t1.join(timeout=10)
-        t2.join(timeout=10)
-
-        # Verify calls and results
-        self.assertEqual(call_count, 1)
-        res1 = results.get()
-        res2 = results.get()
-        
-        self.assertEqual(res1, (200, b"concurrent audio"))
-        self.assertEqual(res2, (200, b"concurrent audio"))
+        # Request 2: status is now DOWNLOADING. Should return 202 directly without starting another thread
+        mock_thread_class.reset_mock()
+        response2 = self.client.get(url)
+        self.assertEqual(response2.status_code, 202)
+        mock_thread_class.assert_not_called()
 
 
 class AdditionalPodcastViewsTest(PodcastTestCase):
@@ -470,52 +399,36 @@ class AdditionalPodcastViewsTest(PodcastTestCase):
         self.assertEqual(data["completed"], 1)
         self.assertEqual(data["pending"], 0)
 
-    @mock.patch("podcasts.tasks.EpisodeProcessor")
-    def test_serve_rehosted_media_stuck_reset(self, mock_processor_class):
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_serve_rehosted_media_stuck_reset(self, mock_thread_class):
         """
-        Test that requesting media for a stuck episode resets it to NEW
-        and triggers synchronous rehosting.
+        Test that requesting media for a stuck episode resets it to NEW and triggers rehosting in background.
         """
         episode = self.episode
-        stuck_time = timezone.now() - timezone.timedelta(minutes=5)
+        stuck_time = timezone.now() - timezone.timedelta(minutes=25)
         Episode.objects.filter(id=episode.id).update(
             status=Episode.Status.DOWNLOADING,
             updated_at=stuck_time
         )
         episode.refresh_from_db()
 
-        def mock_rehost(*args, **kwargs):
-            episode.status = Episode.Status.COMPLETE
-            episode.save()
-            from podcasts.models import RehostedMedia
-            media_item = RehostedMedia.objects.create(
-                media_guid=episode.rehosted_media_id,
-                file_path=os.path.join(settings.MEDIA_ROOT, "stuck_reset.mp3"),
-                content_type="audio/mpeg"
-            )
-            os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
-            with open(media_item.file_path, "wb") as f:
-                f.write(b"recovered audio")
-
-        mock_processor_instance = mock.Mock()
-        mock_processor_instance.rehost_audio.side_effect = mock_rehost
-        mock_processor_class.return_value = mock_processor_instance
+        mock_thread_instance = mock.Mock()
+        mock_thread_class.return_value = mock_thread_instance
 
         url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
         response = self.client.get(url)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.getvalue(), b"recovered audio")
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get("Retry-After"), "30")
 
         episode.refresh_from_db()
-        self.assertEqual(episode.status, Episode.Status.COMPLETE)
-        mock_processor_class.assert_called_once_with(episode)
+        self.assertEqual(episode.status, Episode.Status.DOWNLOADING)
+        mock_thread_class.assert_called_once()
 
-    def test_serve_rehosted_media_failure_raises_404(self):
+    def test_serve_rehosted_media_not_found_raises_404(self):
         """
-        Test that accessing a NEW episode that fails during rehosting
-        raises a 404.
+        Test that accessing a non-existent media GUID raises a 404.
         """
-        episode = self.episode
-        url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
+        import uuid
+        url = reverse("serve_media_episode", kwargs={"media_guid": uuid.uuid4()})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
