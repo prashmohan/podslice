@@ -606,90 +606,59 @@ def serve_rehosted_media(request, media_guid):
     episode = get_object_or_404(Episode, rehosted_media_id=media_guid)
     lock = get_media_lock(media_guid)
 
-    acquired = False
-    try:
-        while True:
-            lock.acquire()
-            acquired = True
-            
-            episode.refresh_from_db()
-            status = episode.status
-            
-            if status == Episode.Status.COMPLETE:
-                lock.release()
-                acquired = False
-                break
-                
-            elif status in [Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING]:
-                from django.utils import timezone
-                # Check if it has been stuck for more than 2 minutes
-                if timezone.now() - episode.updated_at > timezone.timedelta(minutes=2):
-                    logger.warning(
-                        "Episode %s has been in status %s since %s (stuck). Resetting to NEW.",
-                        episode.title,
-                        status,
-                        episode.updated_at,
-                    )
-                    episode.status = Episode.Status.NEW
-                    episode.save(update_fields=["status"])
-                    lock.release()
-                    acquired = False
-                    continue
+    with lock:
+        episode.refresh_from_db()
+        status = episode.status
 
-                lock.release()
-                acquired = False
-                time.sleep(2)
-                continue
-                
-            elif status in [Episode.Status.NEW, Episode.Status.FAILED]:
-                episode.status = Episode.Status.DOWNLOADING
+        if status == Episode.Status.COMPLETE:
+            try:
+                media_item = RehostedMedia.objects.get(pk=media_guid)
+                if os.path.exists(media_item.file_path):
+                    with open(media_item.file_path, "rb") as f:
+                        buffer = io.BytesIO(f.read())
+                    return FileResponse(buffer, content_type=media_item.content_type)
+            except RehostedMedia.DoesNotExist:
+                pass
+            raise Http404("Media is complete but file not found on disk.")
+
+        elif status in [Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING]:
+            from django.utils import timezone
+            # Check if it has been stuck for more than 20 minutes
+            if timezone.now() - episode.updated_at > timezone.timedelta(minutes=20):
+                logger.warning(
+                    "Episode %s has been in status %s since %s (stuck). Resetting to NEW and retrying.",
+                    episode.title,
+                    status,
+                    episode.updated_at,
+                )
+                episode.status = Episode.Status.NEW
                 episode.save(update_fields=["status"])
-                lock.release()
-                acquired = False
-                
-                # Run the processing synchronously
-                from podcasts.tasks import EpisodeProcessor
-                processor = EpisodeProcessor(episode)
-                processor.rehost_audio(force=True)
-                
-                episode.refresh_from_db()
-                if episode.status == Episode.Status.COMPLETE:
-                    break
-                else:
-                    logger.error("Processing failed for episode %s, status is %s", episode.title, episode.status)
-                    raise Http404("Audio processing failed for this episode.")
+                status = Episode.Status.NEW
             else:
-                lock.release()
-                acquired = False
-                raise Http404("Invalid episode status.")
-    finally:
-        if acquired:
-            lock.release()
+                response = HttpResponse(
+                    "Episode is currently being processed. Please try again shortly.",
+                    status=202,
+                )
+                response["Retry-After"] = "30"
+                return response
 
-    try:
-        media_item = RehostedMedia.objects.get(pk=media_guid)
-    except RehostedMedia.DoesNotExist as e:
-        logger.error(
-            "RehostedMedia record not found in database for GUID after processing: %s", media_guid
-        )
-        raise Http404("Media file record not found in the database.") from e
+        if status in [Episode.Status.NEW, Episode.Status.FAILED]:
+            episode.status = Episode.Status.DOWNLOADING
+            episode.save(update_fields=["status"])
 
-    if not os.path.exists(media_item.file_path):
-        logger.error(
-            "Media file not found on disk for GUID %s after processing. Path: %s",
-            media_guid,
-            media_item.file_path,
-        )
-        raise Http404("The media file was registered but not found on disk.")
+            # Run processing in a background thread to prevent request blocking
+            from podcasts.tasks import rehost_episode_audio
+            thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
+            thread.start()
 
-    logger.info("Serving file %s for GUID %s", media_item.file_path, media_guid)
-    try:
-        with open(media_item.file_path, "rb") as f:
-            buffer = io.BytesIO(f.read())
-        response = FileResponse(buffer, content_type=media_item.content_type)
-    except FileNotFoundError as e:
-        raise Http404("The media file was registered but not found on disk.") from e
-    return response
+            response = HttpResponse(
+                "Episode processing has been initiated. Please try again shortly.",
+                status=202,
+            )
+            response["Retry-After"] = "30"
+            return response
+
+    raise Http404("Invalid episode status.")
 
 
 class EpisodeStatusAPIView(View):
