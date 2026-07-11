@@ -214,6 +214,13 @@ class PodcastViewsTest(TestCase):
         mock_thread_instance = mock.Mock()
         mock_thread_class.return_value = mock_thread_instance
 
+        # Capture the old updated_at
+        old_updated_at = episode.updated_at
+
+        # Sleep briefly to guarantee timestamp difference on extremely fast execution
+        import time
+        time.sleep(0.001)
+
         url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
         response = self.client.get(url)
         
@@ -223,7 +230,12 @@ class PodcastViewsTest(TestCase):
 
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.DOWNLOADING)
-        mock_thread_class.assert_called_once()
+        self.assertGreater(episode.updated_at, old_updated_at)
+        mock_thread_class.assert_called_once_with(
+            target=mock.ANY,
+            args=(episode.id,),
+            kwargs={"force": True}
+        )
 
     def test_serve_rehosted_media_complete_status(self):
         """
