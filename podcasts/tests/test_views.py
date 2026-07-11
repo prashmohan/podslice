@@ -9,6 +9,7 @@ from unittest import mock
 from django.conf import settings
 from django.db import connection
 from django.test import TestCase, override_settings, TransactionTestCase
+from podcasts.tests.test_base import PodcastTestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -370,3 +371,151 @@ class PodcastViewsConcurrencyTest(TransactionTestCase):
         
         self.assertEqual(res1, (200, b"concurrent audio"))
         self.assertEqual(res2, (200, b"concurrent audio"))
+
+
+class AdditionalPodcastViewsTest(PodcastTestCase):
+    """
+    Test cases for previously untested views and edge cases.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+
+    def test_podcast_subscribe_ui_view_get(self):
+        """Test GET request to subscribe UI."""
+        url = reverse("podcast-subscribe-ui")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Test Podcast")
+
+    def test_opml_import_view_get(self):
+        """Test GET request to OPML import view."""
+        url = reverse("opml-import")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    @mock.patch("podcasts.views.create_podcast_from_url")
+    def test_opml_import_view_post_success(self, mock_create):
+        """Test uploading a valid OPML file."""
+        opml_content = """<?xml version="1.0" encoding="UTF-8"?>
+        <opml version="1.0">
+            <head><title>Test OPML</title></head>
+            <body>
+                <outline text="My Podcasts">
+                    <outline type="rss" xmlUrl="http://example.com/rss1.xml" />
+                    <outline type="rss" xmlUrl="http://example.com/rss2.xml" />
+                </outline>
+            </body>
+        </opml>"""
+        
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        opml_file = SimpleUploadedFile("test.opml", opml_content.encode("utf-8"), content_type="text/xml")
+        
+        url = reverse("opml-import")
+        response = self.client.post(url, {"opml_file": opml_file})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(mock_create.call_count, 2)
+        mock_create.assert_any_call("http://example.com/rss1.xml")
+        mock_create.assert_any_call("http://example.com/rss2.xml")
+
+    def test_opml_import_view_post_invalid(self):
+        """Test uploading an invalid OPML file."""
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        invalid_file = SimpleUploadedFile("test.opml", b"invalid xml", content_type="text/xml")
+        
+        url = reverse("opml-import")
+        response = self.client.post(url, {"opml_file": invalid_file})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid OPML file")
+
+    def test_opml_backup_view(self):
+        """Test OPML backup view renders original RSS URLs."""
+        url = reverse("opml-backup")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "http://example.com/rss")
+
+    def test_podcast_update_settings_view(self):
+        """Test updating podcast settings."""
+        url = reverse("podcast-update-settings", kwargs={"podcast_id": self.podcast.id})
+        response = self.client.post(url, {"title": "Updated Title", "rss_url": self.podcast.rss_url, "max_episodes": 25})
+        self.assertEqual(response.status_code, 302)
+        self.podcast.refresh_from_db()
+        self.assertEqual(self.podcast.max_episodes, 25)
+
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_podcast_refresh_view(self, mock_thread):
+        """Test triggering podcast refresh."""
+        url = reverse("podcast-refresh", kwargs={"podcast_id": self.podcast.id})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        mock_thread.assert_called_once()
+
+    def test_episode_status_api_view(self):
+        """Test episode status counts API."""
+        # 1 pending (NEW), 0 completed
+        url = reverse("episode-status-api")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["completed"], 0)
+        self.assertEqual(data["pending"], 1)
+
+        # change to COMPLETE
+        self.episode.status = Episode.Status.COMPLETE
+        self.episode.save()
+        response = self.client.get(url)
+        data = response.json()
+        self.assertEqual(data["completed"], 1)
+        self.assertEqual(data["pending"], 0)
+
+    @mock.patch("podcasts.tasks.EpisodeProcessor")
+    def test_serve_rehosted_media_stuck_reset(self, mock_processor_class):
+        """
+        Test that requesting media for a stuck episode resets it to NEW
+        and triggers synchronous rehosting.
+        """
+        episode = self.episode
+        stuck_time = timezone.now() - timezone.timedelta(minutes=5)
+        Episode.objects.filter(id=episode.id).update(
+            status=Episode.Status.DOWNLOADING,
+            updated_at=stuck_time
+        )
+        episode.refresh_from_db()
+
+        def mock_rehost(*args, **kwargs):
+            episode.status = Episode.Status.COMPLETE
+            episode.save()
+            from podcasts.models import RehostedMedia
+            media_item = RehostedMedia.objects.create(
+                media_guid=episode.rehosted_media_id,
+                file_path=os.path.join(settings.MEDIA_ROOT, "stuck_reset.mp3"),
+                content_type="audio/mpeg"
+            )
+            os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
+            with open(media_item.file_path, "wb") as f:
+                f.write(b"recovered audio")
+
+        mock_processor_instance = mock.Mock()
+        mock_processor_instance.rehost_audio.side_effect = mock_rehost
+        mock_processor_class.return_value = mock_processor_instance
+
+        url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.getvalue(), b"recovered audio")
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.COMPLETE)
+        mock_processor_class.assert_called_once_with(episode)
+
+    def test_serve_rehosted_media_failure_raises_404(self):
+        """
+        Test that accessing a NEW episode that fails during rehosting
+        raises a 404.
+        """
+        episode = self.episode
+        url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
