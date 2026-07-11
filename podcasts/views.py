@@ -631,7 +631,7 @@ def serve_rehosted_media(request, media_guid):
                     episode.updated_at,
                 )
                 episode.status = Episode.Status.NEW
-                episode.save(update_fields=["status"])
+                episode.save(update_fields=["status", "updated_at"])
                 status = Episode.Status.NEW
             else:
                 response = HttpResponse(
@@ -643,11 +643,15 @@ def serve_rehosted_media(request, media_guid):
 
         if status in [Episode.Status.NEW, Episode.Status.FAILED]:
             episode.status = Episode.Status.DOWNLOADING
-            episode.save(update_fields=["status"])
+            episode.save(update_fields=["status", "updated_at"])
 
             # Run processing in a background thread to prevent request blocking
             from podcasts.tasks import rehost_episode_audio
-            thread = threading.Thread(target=rehost_episode_audio, args=(episode.id,))
+            thread = threading.Thread(
+                target=rehost_episode_audio,
+                args=(episode.id,),
+                kwargs={"force": True},
+            )
             thread.start()
 
             response = HttpResponse(
