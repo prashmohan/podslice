@@ -45,18 +45,25 @@ You are an expert audio editor. Your task is to identify non-essential segments 
 The total duration of the audio is {audio_duration_seconds} seconds.
 
 Identify the precise start and end times for the following categories:
-* **Ads**: Pre-roll, mid-roll, sponsor reads, or promotional content.
-* **Intro/Outro**: Music, jingles, or repetitive legal/branding announcements.
-* **Off-Topic**: Tangents or banter completely unrelated to "{episode_title}" or "{podcast_title}". 
-* **CTAs**: Requests to subscribe, leave reviews, or visit sponsor URLs.
+* **Ads**: Pre-roll, mid-roll, sponsor reads, or promotional content. This includes native, host-read ads that are woven directly into the narrative of the episode without a change in voiceover or musical cue. Pay close attention to spoken content where the hosts transition to describing a sponsor's product, history, or services, even if it is connected to or framed around the episode's main topic (e.g., host-read sponsor segments in podcasts like "Acquired"). Identify the exact segment where the sponsor is being promoted.
+* **Intro/Outro**: Music, jingles, or repetitive legal/branding announcements. Only identify these if there is no active episode content being delivered (do not cut sections where the host is actively introducing the topic over background music).
+* **Off-Topic**: Tangents or banter completely unrelated to "{episode_title}" or "{podcast_title}". Be conservative here; only identify self-contained tangents that do not transition back into the main topic.
+* **CTAs**: Requests to subscribe, leave reviews, follow social media, or visit sponsor URLs.
 * **Silence**: Continuous silence lasting 3 seconds or longer.
 
-**Output Requirements:**
-1. Return ONLY a JSON array within a markdown code block (```json ... ```).
-2. Each object must have: "start" (float), "end" (float), and "label" (string).
-3. Timestamps are in seconds from the start of the file.
+**Guidelines for Precision & Clean Cuts:**
+1. **Identify Native Ads**: Scan the spoken content for transitions into brand promotions or sponsor stories, even if the same hosts continue speaking in the same tone without music cues. Look for brand names, product descriptions, discount codes, or promotional calls to action.
+2. **Natural Pauses**: Align the start and end times with natural pauses in speech or silence. Do not cut in the middle of a word or sentence. Leave a 0.5-second buffer of silence on either end if possible.
+3. **Merge Proximity**: If consecutive non-essential segments are separated by less than 3 seconds of content, merge them into a single continuous segment to prevent fragmented, choppy audio cutting.
+4. **No Hallucinations**: If there are no ads, CTAs, or other non-essential segments in this audio, return an empty array `[]`.
 
-Example:
+**Output Requirements:**
+1. Return ONLY a valid JSON array within a markdown code block (```json ... ```).
+2. Do not include any introductory text, explanation, notes, or concluding text outside of the code block.
+3. Each object must have: "start" (float), "end" (float), and "label" (string).
+4. Timestamps are in seconds from the start of the file.
+
+Example Output:
 ```json
 [
   {{"start": 0.0, "end": 45.2, "label": "intro"}},
