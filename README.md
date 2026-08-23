@@ -1,139 +1,195 @@
-# Podslice
+# Podslice 🎙️✂️
 
-Podslice is a Django-based application designed to download podcast episodes, intelligently slice them into smaller, ad-free audio segments, and rehost them for a seamless listening experience. It empowers users to enjoy their favorite podcasts without interruptions, while providing a robust platform for managing and serving re-hosted content.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
+[![Django](https://img.shields.io/badge/django-5.2-green.svg)](https://www.djangoproject.com/)
+[![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
 
-## Capabilities & Features
+**Podslice** is a self-hosted application designed to transform standard podcast feeds into clean, ad-free RSS feeds. It leverages **Google Gemini AI** to detect sponsor segments, host-read native ads, and promotional intros/outros, and uses **FFmpeg** to seamlessly slice them out.
 
-*   **Podcast Subscription & Management:** Easily subscribe to any podcast RSS feed via a simple web interface.
-*   **Automated Episode Processing:** Automatically fetches new episodes, downloads audio, and processes them in the background using Python threads.
-*   **Intelligent Ad Detection & Slicing:** Utilizes Google's Generative AI to identify and remove ad segments from audio, creating a cleaner listening experience.
-*   **Re-hosted RSS Feeds:** Generates new RSS feeds for your sliced podcasts, allowing you to subscribe to the ad-free versions in your preferred podcast client.
-*   **OPML Import/Export:** Export your podcast subscriptions in OPML format for easy migration or backup, and import subscriptions from other podcast clients.
-*   **Episode Status Tracking:** Monitor the processing status of each episode (downloading, analyzing, processing, complete, failed) via the web interface.
-*   **On-demand Reprocessing:** Manually trigger reprocessing of podcasts.
-*   **Per-podcast Retention Settings:** Configure how many episodes to keep for each subscription, with an option for unlimited retention.
+Subscribe to your customized ad-free feeds from any standard podcast player (Apple Podcasts, Pocket Casts, Overcast, AntennaPod, etc.) and enjoy uninterrupted listening.
 
-## Technologies Used
+---
 
-*   **Backend:** Django, Django REST Framework
-*   **Asynchronous Tasks:** Python's `threading` module
-*   **AI Integration:** Google Generative AI (for ad detection)
-*   **Audio Manipulation:** `ffmpeg`
-*   **RSS Parsing:** `feedparser`
-*   **HTTP Requests:** `requests`
-*   **Database:** SQLite
-*   **Containerization:** Docker, Docker Compose
-*   **Web Server:** Nginx
+## 🌟 Key Features
 
-## Getting Started
+* **Intelligent AI Ad Detection**: Uses Google Gemini to detect pre-roll, mid-roll, native host-read sponsorships, repetitive intros/outros, and promotional CTAs.
+* **Automatic Model Fallback**: Configured to seamlessly fall back to secondary models (e.g. from Flash to Flash-Lite) to handle rate limits and transient errors.
+* **On-Demand Dynamic Processing**: Downloads and slices audio only when a client or podcast app requests the episode, saving storage and API quota.
+* **iTunes / Apple Podcasts Compliant Feeds**: Generated feeds include full metadata, episode durations, cover art, descriptions, and standard podcast tags.
+* **OPML Import, Export & Backup**: Effortlessly migrate subscriptions to/from any podcast client with full OPML support.
+* **Granular Retention Limits**: Configure retention policies per podcast (e.g., retain the last $N$ episodes or store unlimited episodes).
+* **Web UI & REST API**: Intuitive web dashboard to monitor episode statuses, toggle AI processing per episode, trigger reprocessing, or interact via REST APIs.
+* **Production Ready**: Bundled with Docker, Docker Compose, Gunicorn, and an Nginx reverse-proxy configuration.
 
-### Local Development (Without Docker)
+---
 
-To get started with Podslice locally, you'll need Python 3.8+ and pip.
+## 🔄 How It Works
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/prashmohan/podslice.git
-    cd podslice
-    ```
-
-2.  **Set up a virtual environment:**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate
-    ```
-
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4.  **Set Environment Variables:**
-    Before running the application, you must set the environment variables listed in the **Environment Variables** section below. You can create a `.env` file in the project root to store these variables.
-
-5.  **Run the Application:**
-    ```bash
-    python manage.py runserver
-    ```
-    This command starts the Django development server.
-
-### Docker Deployment
-
-The recommended way to run Podslice is using Docker and Docker Compose.
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/prashmohan/podslice.git
-    cd podslice
-    ```
-
-2.  **Create an environment file:**
-    Create a `.env` file by copying the example and filling in the required values.
-    ```bash
-    cp .env.example .env
-    ```
-    See the **Environment Variables** section for more details on each variable.
-
-3.  **Build and run with Docker Compose:**
-    ```bash
-    docker-compose up --build
-    ```
-    This command will build the Docker image and start the `app` and `web` (Nginx) services. The application will be accessible at `http://localhost:12343`.
-
-## Environment Variables
-
-The following environment variables are used to configure the application. They can be placed in a `.env` file in the project root.
-
-| Variable                      | Description                                                                                                   | Default                               |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `DJANGO_SECRET_KEY`           | A unique secret key for your Django project.                                                                  | A randomly generated key              |
-| `GEMINI_API_KEY`              | Your API key for Google Generative AI.                                                                        | **Required**                          |
-| `GEMINI_MODEL`                | The Gemini model to use for analysis.                                                                         | `gemini-3-flash-preview`              |
-| `FALLBACK_GEMINI_MODEL`       | The fallback Gemini model to use if the primary model fails.                                                   | `gemini-3.1-flash-lite-preview`       |
-| `REHOST_BASE_URL`             | The base URL where audio files will be served (e.g., http://localhost:12343).                                 | **Required**                          |
-| `DJANGO_ALLOWED_HOSTS`        | A comma-separated list of allowed hostnames.                                                                  | `localhost,127.0.0.1`                 |
-| `DJANGO_CSRF_TRUSTED_ORIGINS` | A comma-separated list of trusted origins for CSRF.                                                           | `http://localhost:12343`              |
-| `SECURE_SSL_REDIRECT`         | If `True`, redirects all HTTP requests to HTTPS.                                                              | `False`                               |
-| `MAX_EPISODES_PER_PODCAST`    | The default maximum number of recent episodes to download and process for new podcast subscriptions. Can be overridden per podcast. | `10`                                  |
-| `PODCAST_POLLING_INTERVAL`    | The interval, in seconds, at which to poll for new podcast episodes.                                          | `43200` (12 hours)                    |
-| `LOG_LEVEL`                   | The logging level for the application.                                                                        | `INFO`                                |
-
-## Nginx Configuration
-
-The provided `nginx.conf` sets up a reverse proxy.
-
-*   **Port `12343`:** This is the main port for the web interface and API. It proxies requests to the Django application running on port `8000`. It also serves static and media files directly.
-*   **Port `12341`:** This port is dedicated to serving the re-hosted RSS feeds and media files. This allows for a separate, cleaner URL for podcast clients.
-
-## Database Migrations
-
-After making changes to models, you'll need to create and apply migrations.
-
-```bash
-python manage.py makemigrations
-python manage.py migrate
 ```
-If you are running the application with Docker, you will need to run these commands inside the `app` container:
-```bash
-docker-compose exec app python manage.py makemigrations
-docker-compose exec app python manage.py migrate
+                                 +--------------------------------+
+                                 | Original Podcast RSS Feed (Web)|
+                                 +--------------------------------+
+                                                 |
+                                                 v
+  +-------------------+       HTTP GET       +--------------------+
+  |   Podcast App     | <==================  |   Podslice Server  |
+  | (Apple Podcasts,  |                      |  (Django + Nginx)  |
+  |  Pocket Casts)    | --- Request Audio -> |                    |
+  +-------------------+                      +--------------------+
+                                                       |
+                                           +-----------+-----------+
+                                           |                       |
+                                    1. Download Audio       2. AI Ad Analysis
+                                           |                       |
+                                           v                       v
+                                    [ Original MP3 ]      [ Google Gemini API ]
+                                           \                       /
+                                            \  3. Slicing (FFmpeg)/
+                                             v                   v
+                                         +--------------------------+
+                                         |   Clean Ad-Free Audio    |
+                                         +--------------------------+
+                                                     |
+                                                     v
+                                         Streamed to Podcast App 🎧
 ```
 
-## Running Tests
+1. **Ingest**: You subscribe to a podcast feed via the web UI or OPML import. Podslice ingests the feed and generates a unique rehosted RSS URL.
+2. **On-Demand Processing**: When your podcast player requests an episode, Podslice downloads the audio file and sends it to the Gemini API.
+3. **Smart Slicing**: FFmpeg cuts out the identified timestamps and concatenates the clean audio segments.
+4. **Rehosting & Caching**: The sliced audio is cached and served to your podcast client. Subsequent requests for the same episode are served instantly.
 
-To run the tests for the `podcasts` app:
+---
 
+## 🚀 Getting Started
+
+### Prerequisites
+
+* **Google Gemini API Key**: Obtain a free API key from [Google AI Studio](https://aistudio.google.com/).
+* **FFmpeg**: Required for audio slicing (pre-installed in Docker images).
+
+---
+
+### Option 1: Quick Start with Docker (Recommended)
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/prashmohan/podslice.git
+   cd podslice
+   ```
+
+2. **Configure environment variables:**
+   ```bash
+   cp .env.example .env
+   ```
+   Open `.env` and configure your settings (at minimum, set `GEMINI_API_KEY` and `DJANGO_SECRET_KEY`):
+   ```ini
+   DJANGO_SECRET_KEY=your_random_secret_key_here
+   GEMINI_API_KEY=your_gemini_api_key_here
+   REHOST_BASE_URL=http://localhost:12343
+   ```
+
+3. **Start the services:**
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. **Access the application:**
+   * **Web Dashboard**: [http://localhost:12343](http://localhost:12343)
+   * **Dedicated Media/Feed Port**: `http://localhost:12341`
+
+---
+
+### Option 2: Local Development (Without Docker)
+
+1. **Clone and setup a virtual environment:**
+   ```bash
+   git clone https://github.com/prashmohan/podslice.git
+   cd podslice
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
+
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+   *Ensure `ffmpeg` is installed on your operating system (`sudo apt install ffmpeg` on Ubuntu/Debian, `brew install ffmpeg` on macOS).*
+
+3. **Configure environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env and set your GEMINI_API_KEY and DJANGO_SECRET_KEY
+   ```
+
+4. **Apply database migrations:**
+   ```bash
+   python manage.py migrate
+   ```
+
+5. **Start the development server:**
+   ```bash
+   python manage.py runserver
+   ```
+   Visit `http://localhost:8000` in your browser.
+
+---
+
+## ⚙️ Configuration & Environment Variables
+
+Create a `.env` file in the project root. The available configuration options are:
+
+| Variable | Description | Default | Required |
+| :--- | :--- | :--- | :--- |
+| `GEMINI_API_KEY` | Google AI Studio API key for Gemini models. | — | **Yes** |
+| `DJANGO_SECRET_KEY` | Django cryptographic secret key. | Generated if unset | **Recommended** |
+| `REHOST_BASE_URL` | Base public URL where feeds and media are served. | `http://localhost:12343` | **Yes** |
+| `GEMINI_MODEL` | Primary Gemini model for ad detection. | `gemini-3-flash-preview` | No |
+| `FALLBACK_GEMINI_MODEL` | Secondary fallback model if primary fails. | `gemini-3.1-flash-lite-preview` | No |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated list of allowed host header values. | `localhost,127.0.0.1` | No |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | Comma-separated list of trusted origins for CSRF. | `http://localhost:12343` | No |
+| `MAX_EPISODES_PER_PODCAST` | Default retention limit for new subscriptions (0 = all). | `10` | No |
+| `PODCAST_POLLING_INTERVAL` | Polling frequency for new episodes (in seconds). | `43200` (12h) | No |
+| `SECURE_SSL_REDIRECT` | Redirect all HTTP traffic to HTTPS in production. | `False` | No |
+| `LOG_LEVEL` | Application logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). | `INFO` | No |
+| `TIME_ZONE` | Time zone string for timestamp rendering. | `UTC` | No |
+
+---
+
+## 📱 Usage Guide
+
+### Subscribing to a Podcast
+1. Open the Podslice web dashboard.
+2. Paste the RSS feed URL of any podcast.
+3. Click **Subscribe**. Podslice will fetch the podcast metadata and generate a custom feed link.
+4. Copy the generated **Rehosted RSS Feed** URL and add it to your podcast app (e.g., Pocket Casts *Add by URL*, Apple Podcasts *Follow a Show by URL*).
+
+### OPML Import & Export
+* **Export OPML**: Download an OPML file containing your re-hosted (ad-free) feed links to import into any podcast app in bulk.
+* **Backup OPML**: Download an OPML file with the original podcast URLs for archiving.
+* **Import OPML**: Upload an existing OPML file to batch-subscribe to multiple podcasts at once.
+
+### Per-Episode Controls
+* **Skip AI & Rehost**: If a specific episode doesn't contain ads or you prefer original audio, toggle off AI processing from the episode status page.
+* **Reprocess Episode**: Clear cached audio and re-run Gemini analysis and FFmpeg slicing.
+
+---
+
+## 🧪 Testing & Code Quality
+
+Run the test suite:
 ```bash
 python manage.py test podcasts
 ```
-To run tests inside the Docker container:
+
+Run linting:
 ```bash
-docker-compose exec app python manage.py test podcasts
+python manage.py lint
 ```
 
-## Code Style and Conventions
+---
 
-*   Follow Django's coding style.
-*   Keep models, views, and serializers in their respective files.
-*   Use Python's `threading` module for any long-running tasks to avoid blocking web requests.
-*   Write tests for new features and bug fixes.
+## 📄 License
+
+This project is open source and available under the [MIT License](LICENSE).

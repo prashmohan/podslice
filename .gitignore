@@ -119,6 +119,12 @@ data/ # Be careful with this one, only if all data should be ignored
 *.sqlite3
 *.db
 *.db3
+db/
+
+# --- Podslice Media & Static Files ---
+media/
+staticfiles/
+test_media/
 
 # --- HTML documentation ---
 # (if generated from source and not meant to be in the repo)
@@ -129,3 +135,4 @@ site/ # if using mkdocs or similar
 *.tmp
 *.temp
 *.mp3
+
