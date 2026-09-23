@@ -14,7 +14,7 @@
 - `GEMINI_API_KEYS` supports comma-delimited strings with fallback to `GEMINI_API_KEY`.
 - `GEMINI_MAX_RETRY_DELAY_SEC` defaults to 30 seconds.
 - Every API key maintains its own audio file upload handle via `uploaded_files: Dict[str, Any]`.
-- All tests must pass via `docker exec podslice-app-1 python manage.py test podcasts`.
+- All tests must pass via `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts`.
 
 ## Review Focus
 1. Unquoted or string `MM:SS.sss` timestamps in model output must convert to float seconds without crashing `json.loads`.
@@ -61,7 +61,7 @@ class SettingsGeminiConfigTest(TestCase):
 
 - [ ] **Step 2: Run test to verify it passes/fails**
 
-Run: `docker exec podslice-app-1 python manage.py test podcasts.tests.test_settings`
+Run: `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts.tests.test_settings`
 
 - [ ] **Step 3: Update `podslice/settings.py`, `.env.example`, and `README.md`**
 
@@ -85,7 +85,7 @@ Update `.env.example` and `README.md` to document `GEMINI_API_KEYS`.
 
 - [ ] **Step 4: Run test suite**
 
-Run: `docker exec podslice-app-1 python manage.py test podcasts.tests.test_settings`
+Run: `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts.tests.test_settings`
 
 - [ ] **Step 5: Commit**
 
@@ -149,7 +149,7 @@ class AdSegmentsParsingTest(TestCase):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `docker exec podslice-app-1 python manage.py test podcasts.tests.test_parsing`
+Run: `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts.tests.test_parsing`
 
 - [ ] **Step 3: Implement resilient parsing in `_parse_ad_segments`**
 
@@ -162,7 +162,7 @@ In `podcasts/tasks.py`:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `docker exec podslice-app-1 python manage.py test podcasts.tests.test_parsing`
+Run: `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts.tests.test_parsing`
 
 - [ ] **Step 5: Commit**
 
@@ -194,7 +194,7 @@ Update `podcasts/tests/test_fallback.py` to test:
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `docker exec podslice-app-1 python manage.py test podcasts.tests.test_fallback`
+Run: `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts.tests.test_fallback`
 
 - [ ] **Step 3: Implement multi-key and retry logic in `_get_ad_segments_from_gemini`**
 
@@ -210,7 +210,7 @@ In `podcasts/tasks.py`:
 
 - [ ] **Step 4: Run tests to verify pass**
 
-Run: `docker exec podslice-app-1 python manage.py test podcasts.tests.test_fallback`
+Run: `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts.tests.test_fallback`
 
 - [ ] **Step 5: Commit**
 
@@ -226,9 +226,9 @@ git commit -m "feat(gemini): implement multi-API-key fallback, per-key upload is
 **Files:**
 - Test: All tests in `podcasts`
 
-- [ ] **Step 1: Run full test suite in container**
+- [ ] **Step 1: Run full test suite locally**
 
-Run: `docker exec podslice-app-1 python manage.py test podcasts`
+Run: `/home/prmohan/projects/podslice/venv/bin/python manage.py test podcasts`
 Expected: 75+ tests PASS with 0 failures.
 
 - [ ] **Step 2: Verify git status and clean working tree**
