@@ -189,13 +189,19 @@ REHOST_BASE_URL = os.environ.get("REHOST_BASE_URL")
 if not REHOST_BASE_URL:
     raise ImproperlyConfigured("REHOST_BASE_URL environment variable not set.")
 
-# Gemini API Key
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ImproperlyConfigured("GEMINI_API_KEY environment variable not set.")
+# Gemini API Key configuration
+_raw_gemini_keys = os.environ.get("GEMINI_API_KEYS", "").strip()
+if _raw_gemini_keys:
+    GEMINI_API_KEYS = [k.strip() for k in _raw_gemini_keys.split(",") if k.strip()]
+elif os.environ.get("GEMINI_API_KEY"):
+    GEMINI_API_KEYS = [os.environ.get("GEMINI_API_KEY").strip()]
+else:
+    GEMINI_API_KEYS = []
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
-FALLBACK_GEMINI_MODEL = os.environ.get("FALLBACK_GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+FALLBACK_GEMINI_MODEL = os.environ.get("FALLBACK_GEMINI_MODEL", "gemini-3.5-flash-lite")
+GEMINI_MAX_RETRY_DELAY_SEC = int(os.environ.get("GEMINI_MAX_RETRY_DELAY_SEC", 30))
 
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()

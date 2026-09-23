@@ -83,10 +83,12 @@ Subscribe to your customized ad-free feeds from any standard podcast player (App
    ```bash
    cp .env.example .env
    ```
-   Open `.env` and configure your settings (at minimum, set `GEMINI_API_KEY` and `DJANGO_SECRET_KEY`):
+   Open `.env` and configure your settings (at minimum, set `GEMINI_API_KEYS` or `GEMINI_API_KEY`, and `DJANGO_SECRET_KEY`):
    ```ini
    DJANGO_SECRET_KEY=your_random_secret_key_here
    GEMINI_API_KEY=your_gemini_api_key_here
+   # Or for multi-key support:
+   # GEMINI_API_KEYS=key1,key2,key3
    REHOST_BASE_URL=http://localhost:12343
    ```
 
@@ -142,11 +144,13 @@ Create a `.env` file in the project root. The available configuration options ar
 
 | Variable | Description | Default | Required |
 | :--- | :--- | :--- | :--- |
-| `GEMINI_API_KEY` | Google AI Studio API key for Gemini models. | — | **Yes** |
+| `GEMINI_API_KEYS` | Comma-separated Google AI Studio API keys for quota distribution and rotation. | — | **Yes** (or `GEMINI_API_KEY`) |
+| `GEMINI_API_KEY` | Single Google AI Studio API key (legacy fallback). | — | **Yes** (if `GEMINI_API_KEYS` unset) |
 | `DJANGO_SECRET_KEY` | Django cryptographic secret key. | Generated if unset | **Recommended** |
 | `REHOST_BASE_URL` | Base public URL where feeds and media are served. | `http://localhost:12343` | **Yes** |
-| `GEMINI_MODEL` | Primary Gemini model for ad detection. | `gemini-3-flash-preview` | No |
-| `FALLBACK_GEMINI_MODEL` | Secondary fallback model if primary fails. | `gemini-3.1-flash-lite-preview` | No |
+| `GEMINI_MODEL` | Primary Gemini model for ad detection. | `gemini-3.8-flash` | No |
+| `FALLBACK_GEMINI_MODEL` | Secondary fallback model if primary fails across keys. | `gemini-3.5-flash-lite` | No |
+| `GEMINI_MAX_RETRY_DELAY_SEC` | Max sleep delay in seconds on 429 quota limits before primary retry. | `30` | No |
 | `DJANGO_ALLOWED_HOSTS` | Comma-separated list of allowed host header values. | `localhost,127.0.0.1` | No |
 | `DJANGO_CSRF_TRUSTED_ORIGINS` | Comma-separated list of trusted origins for CSRF. | `http://localhost:12343` | No |
 | `MAX_EPISODES_PER_PODCAST` | Default retention limit for new subscriptions (0 = all). | `10` | No |
