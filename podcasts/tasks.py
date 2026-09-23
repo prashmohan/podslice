@@ -4,6 +4,7 @@ This module contains Celery tasks for the podcasts app.
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -12,7 +13,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import feedparser
 import google.generativeai as genai
@@ -32,7 +33,7 @@ BROWSER_USER_AGENT = getattr(
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/91.0.4472.124 Safari/537.36",
 )
-GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_MODEL = getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash")
 DOWNLOAD_POOL = ThreadPoolExecutor(max_workers=settings.DOWNLOAD_WORKER_COUNT)
 EPISODES_PER_FEED = getattr(settings, "EPISODES_PER_FEED", 5)
 
@@ -86,8 +87,8 @@ class AdManager:
     ) -> str:
         """Sends audio to the Gemini API for ad detection with automatic fallback."""
         models_to_try = [
-            getattr(settings, "GEMINI_MODEL", "gemini-3-flash-preview"),
-            getattr(settings, "FALLBACK_GEMINI_MODEL", "gemini-3.1-flash-lite-preview"),
+            getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash"),
+            getattr(settings, "FALLBACK_GEMINI_MODEL", "gemini-3.5-flash-lite"),
         ]
 
         logger.debug("Attempting ad detection with Gemini.")
@@ -118,6 +119,65 @@ class AdManager:
 
         return "[]"
 
+    @staticmethod
+    def _normalize_timestamp(val: Any) -> Optional[float]:
+        """Normalizes a timestamp value (float, int, MM:SS, HH:MM:SS) to seconds as float."""
+        if val is None or isinstance(val, bool):
+            return None
+        if isinstance(val, (int, float)):
+            sec = float(val)
+            return (
+                sec
+                if sec >= 0 and not math.isnan(sec) and not math.isinf(sec)
+                else None
+            )
+        if isinstance(val, str):
+            val = val.strip()
+            try:
+                sec = float(val)
+                return (
+                    sec
+                    if sec >= 0 and not math.isnan(sec) and not math.isinf(sec)
+                    else None
+                )
+            except ValueError:
+                pass
+            parts = val.split(":")
+            try:
+                if len(parts) == 2:  # MM:SS or MM:SS.mmm
+                    minutes = float(parts[0])
+                    seconds = float(parts[1])
+                    if (
+                        minutes < 0
+                        or seconds < 0
+                        or math.isnan(minutes)
+                        or math.isnan(seconds)
+                        or math.isinf(minutes)
+                        or math.isinf(seconds)
+                    ):
+                        return None
+                    return minutes * 60.0 + seconds
+                if len(parts) == 3:  # HH:MM:SS or HH:MM:SS.mmm
+                    hours = float(parts[0])
+                    minutes = float(parts[1])
+                    seconds = float(parts[2])
+                    if (
+                        hours < 0
+                        or minutes < 0
+                        or seconds < 0
+                        or math.isnan(hours)
+                        or math.isnan(minutes)
+                        or math.isnan(seconds)
+                        or math.isinf(hours)
+                        or math.isinf(minutes)
+                        or math.isinf(seconds)
+                    ):
+                        return None
+                    return hours * 3600.0 + minutes * 60.0 + seconds
+            except (ValueError, TypeError):
+                return None
+        return None
+
     def _parse_ad_segments(self, gemini_response: str) -> List[Dict[str, float]]:
         """Parses the JSON response from Gemini to extract ad segments."""
         logger.debug(
@@ -126,37 +186,85 @@ class AdManager:
             self.episode.id,
             gemini_response,
         )
-        match = re.search(r"```json\n(.*?)?\n```|(.*)", gemini_response, re.DOTALL)
-        if not match:
+        if not gemini_response or not isinstance(gemini_response, str):
             logger.warning(
-                "No valid JSON array found in Gemini response for Episode '%s' (%s).",
+                "Gemini API returned empty or non-string response for Episode '%s' (%s).",
                 self.episode.title,
                 self.episode.id,
-            )
-            return []
-
-        json_string = next(g for g in match.groups() if g is not None)
-        try:
-            ad_segments_list = json.loads(json_string)
-            if not isinstance(ad_segments_list, list) or not all(
-                isinstance(item, dict) and "start" in item and "end" in item
-                for item in ad_segments_list
-            ):
-                raise json.JSONDecodeError("Invalid structure", json_string, 0)
-            ad_segments_list.sort(key=lambda x: x["start"])
-            return ad_segments_list
-        except json.JSONDecodeError:
-            logger.warning(
-                "Gemini API returned invalid JSON for ad segments for Episode '%s' (%s). Response: %s",
-                self.episode.title,
-                self.episode.id,
-                json_string,
             )
             self.episode.status = Episode.Status.FAILED
             Episode.objects.filter(id=self.episode.id).update(
                 status=Episode.Status.FAILED
             )
             return []
+
+        raw_list = None
+
+        # 1. Direct JSON parse
+        try:
+            parsed = json.loads(gemini_response.strip())
+            if isinstance(parsed, list):
+                raw_list = parsed
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+        # 2. Markdown code fences (```json [...] ``` or ``` [...] ```)
+        if raw_list is None:
+            match = re.search(
+                r"```(?:json)?\s*(\[.*?\])\s*```",
+                gemini_response,
+                re.DOTALL | re.IGNORECASE,
+            )
+            if match:
+                try:
+                    parsed = json.loads(match.group(1).strip())
+                    if isinstance(parsed, list):
+                        raw_list = parsed
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+        # 3. Fallback search for outermost [...]
+        if raw_list is None:
+            match = re.search(r"(\[.*\])", gemini_response, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group(1).strip())
+                    if isinstance(parsed, list):
+                        raw_list = parsed
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+        if raw_list is None or not all(
+            isinstance(item, dict) and "start" in item and "end" in item
+            for item in raw_list
+        ):
+            logger.warning(
+                "Gemini API returned invalid JSON for ad segments for Episode '%s' (%s). Response: %s",
+                self.episode.title,
+                self.episode.id,
+                gemini_response,
+            )
+            self.episode.status = Episode.Status.FAILED
+            Episode.objects.filter(id=self.episode.id).update(
+                status=Episode.Status.FAILED
+            )
+            return []
+
+        valid_segments = []
+        for item in raw_list:
+            start = self._normalize_timestamp(item.get("start"))
+            end = self._normalize_timestamp(item.get("end"))
+            if start is None or end is None:
+                continue
+            if end <= start:
+                continue
+            segment = dict(item)
+            segment["start"] = start
+            segment["end"] = end
+            valid_segments.append(segment)
+
+        valid_segments.sort(key=lambda x: x["start"])
+        return valid_segments
 
     def analyze_audio(
         self, audio_path: str, audio_duration_seconds: float
@@ -232,7 +340,9 @@ class EpisodeProcessor:
             raise
 
         duration_sec = self._get_audio_duration(final_audio_path)
-        duration_seconds = int(round(duration_sec)) if duration_sec is not None else None
+        duration_seconds = (
+            int(round(duration_sec)) if duration_sec is not None else None
+        )
 
         self.episode.rehosted_audio_size = file_size
         self.episode.rehosted_media_id = media_entry.media_guid
@@ -544,10 +654,15 @@ class EpisodeProcessor:
 
             self._update_status(Episode.Status.PROCESSING)
             if self.episode.disable_ai_processing:
-                logger.info("AI processing disabled for '%s'. Skipping analysis.", self.episode.title)
+                logger.info(
+                    "AI processing disabled for '%s'. Skipping analysis.",
+                    self.episode.title,
+                )
                 ad_segments_list = []
             else:
-                ad_segments_list = self.ad_manager.analyze_audio(audio_path, audio_duration_seconds)
+                ad_segments_list = self.ad_manager.analyze_audio(
+                    audio_path, audio_duration_seconds
+                )
             logger.info(
                 "Finished Ad analysis audio for '%s' from podcast '%s'.",
                 self.episode.title,
@@ -719,7 +834,10 @@ class FeedManager:
             return None
 
     def _process_feed_entries(
-        self, feed: feedparser.FeedParserDict, episodes_to_process: set, download_all: bool = False
+        self,
+        feed: feedparser.FeedParserDict,
+        episodes_to_process: set,
+        download_all: bool = False,
     ):
         """Processes the entries in the feed, creating new episodes as needed."""
         new_episodes_count = 0
@@ -848,7 +966,9 @@ class FeedManager:
             if not feed:
                 return
 
-            self._process_feed_entries(feed, episodes_to_process, download_all=download_all)
+            self._process_feed_entries(
+                feed, episodes_to_process, download_all=download_all
+            )
             self._enforce_episode_limit()
         finally:
             lock.release()
