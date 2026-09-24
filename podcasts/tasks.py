@@ -82,41 +82,195 @@ class AdManager:
         """Initializes the AdManager."""
         self.episode = episode
 
+    @staticmethod
+    def _is_rate_limit_error(exc: Exception) -> bool:
+        """Determines if an exception corresponds to an HTTP 429 rate limit or quota exhaustion."""
+        code = (
+            getattr(exc, "code", None)
+            or getattr(exc, "status_code", None)
+            or getattr(exc, "http_status", None)
+        )
+        if code == 429 or str(code) == "429":
+            return True
+
+        type_name = type(exc).__name__
+        if any(
+            name in type_name
+            for name in ("ResourceExhausted", "RateLimit", "TooManyRequests")
+        ):
+            return True
+
+        msg = str(exc)
+        if (
+            "429" in msg
+            or "ResourceExhausted" in msg
+            or "RESOURCE_EXHAUSTED" in msg
+            or "rate limit" in msg.lower()
+            or "quota exceeded" in msg.lower()
+        ):
+            return True
+
+        return False
+
+    @staticmethod
+    def _extract_retry_delay(exc: Exception) -> float:
+        """Extracts the retry delay in seconds from an exception or defaults to 10.0s."""
+        for attr in ("retry_delay", "retry_after"):
+            delay_val = getattr(exc, attr, None)
+            if delay_val is not None:
+                if hasattr(delay_val, "total_seconds"):
+                    try:
+                        return max(0.0, float(delay_val.total_seconds()))
+                    except (ValueError, TypeError):
+                        pass
+                if hasattr(delay_val, "seconds"):
+                    try:
+                        return max(0.0, float(delay_val.seconds))
+                    except (ValueError, TypeError):
+                        pass
+                try:
+                    return max(0.0, float(delay_val))
+                except (ValueError, TypeError):
+                    pass
+
+        msg = str(exc)
+        # Regex 1: "retry in 15.5s" or "retry in 10s"
+        m1 = re.search(r"retry in ([0-9.]+)s", msg, re.IGNORECASE)
+        if m1:
+            try:
+                return max(0.0, float(m1.group(1)))
+            except ValueError:
+                pass
+
+        # Regex 2: "seconds: 15" or "seconds: 15.5"
+        m2 = re.search(r"seconds:\s*([0-9.]+)", msg, re.IGNORECASE)
+        if m2:
+            try:
+                return max(0.0, float(m2.group(1)))
+            except ValueError:
+                pass
+
+        return 10.0
+
     def _get_ad_segments_from_gemini(
         self, audio_path: str, audio_duration_seconds: float
     ) -> str:
-        """Sends audio to the Gemini API for ad detection with automatic fallback."""
-        models_to_try = [
-            getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash"),
-            getattr(settings, "FALLBACK_GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        ]
+        """Sends audio to the Gemini API for ad detection with multi-key rotation and automatic fallback."""
+        raw_keys = getattr(settings, "GEMINI_API_KEYS", None)
+        api_keys = []
+        if raw_keys:
+            if isinstance(raw_keys, str):
+                api_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+            elif isinstance(raw_keys, (list, tuple)):
+                api_keys = [str(k).strip() for k in raw_keys if str(k).strip()]
 
-        logger.debug("Attempting ad detection with Gemini.")
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        audio_file = None
+        if not api_keys:
+            legacy_key = getattr(settings, "GEMINI_API_KEY", None)
+            if legacy_key and str(legacy_key).strip():
+                api_keys = [str(legacy_key).strip()]
+
+        if not api_keys:
+            logger.error("No Gemini API keys configured.")
+            return "[]"
+
+        # Deduplicate keys while preserving order
+        api_keys = list(dict.fromkeys(api_keys))
+
+        primary_model = getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash")
+        fallback_model = getattr(
+            settings, "FALLBACK_GEMINI_MODEL", "gemini-3.5-flash-lite"
+        )
+        max_retry_delay = getattr(settings, "GEMINI_MAX_RETRY_DELAY_SEC", 30)
 
         prompt = GEMINI_PROMPT.format(
-            episode_title=self.episode.title,
-            podcast_title=self.episode.podcast.title,
+            episode_title=self.episode.title if self.episode else "",
+            podcast_title=(
+                self.episode.podcast.title
+                if self.episode and self.episode.podcast
+                else ""
+            ),
             audio_duration_seconds=audio_duration_seconds,
         )
 
-        for model_name in models_to_try:
-            try:
-                logger.info("Attempting ad detection with model: %s", model_name)
-                model = genai.GenerativeModel(model_name)
-                if audio_file is None:
-                    audio_file = genai.upload_file(path=audio_path)
+        uploaded_files: Dict[str, Any] = {}
 
-                response = model.generate_content([prompt, audio_file])
-                return response.text
+        def _call_model_with_key(model_name: str, api_key: str) -> str:
+            genai.configure(api_key=api_key)
+            if api_key not in uploaded_files:
+                uploaded_files[api_key] = genai.upload_file(path=audio_path)
+            model = genai.GenerativeModel(
+                model_name,
+                generation_config={"response_mime_type": "application/json"},
+            )
+            response = model.generate_content([prompt, uploaded_files[api_key]])
+            return response.text
+
+        logger.debug("Attempting ad detection with Gemini.")
+        retry_delays: List[float] = []
+
+        # Phase 1: Try Primary Model across all keys
+        for api_key in api_keys:
+            try:
+                logger.info(
+                    "Attempting ad detection with primary model: %s",
+                    primary_model,
+                )
+                return _call_model_with_key(primary_model, api_key)
             except Exception as e:
                 logger.warning(
-                    "Gemini API call failed for model %s: %s", model_name, str(e)
+                    "Gemini API call failed for model %s with key %s: %s",
+                    primary_model,
+                    api_key[:6] + "..." if len(api_key) > 6 else api_key,
+                    str(e),
                 )
-                if model_name == models_to_try[-1]:
-                    logger.error("All Gemini models failed.")
+                if self._is_rate_limit_error(e):
+                    retry_delays.append(self._extract_retry_delay(e))
 
+        # Phase 2: If all keys failed on primary model and at least one was 429, retry primary once
+        if retry_delays:
+            sleep_sec = min(min(retry_delays), max_retry_delay)
+            sleep_sec = max(0.0, float(sleep_sec))
+            logger.info(
+                "All keys rate limited on primary model %s. Sleeping %.1fs before retry.",
+                primary_model,
+                sleep_sec,
+            )
+            time.sleep(sleep_sec)
+            for api_key in api_keys:
+                try:
+                    logger.info(
+                        "Retrying ad detection with primary model: %s",
+                        primary_model,
+                    )
+                    return _call_model_with_key(primary_model, api_key)
+                except Exception as e:
+                    logger.warning(
+                        "Gemini API retry failed for model %s with key %s: %s",
+                        primary_model,
+                        api_key[:6] + "..." if len(api_key) > 6 else api_key,
+                        str(e),
+                    )
+
+        # Phase 3: Fallback model across all keys
+        logger.info(
+            "Attempting ad detection with fallback model: %s", fallback_model
+        )
+        for api_key in api_keys:
+            try:
+                logger.info(
+                    "Attempting ad detection with model: %s", fallback_model
+                )
+                return _call_model_with_key(fallback_model, api_key)
+            except Exception as e:
+                logger.warning(
+                    "Gemini API call failed for model %s with key %s: %s",
+                    fallback_model,
+                    api_key[:6] + "..." if len(api_key) > 6 else api_key,
+                    str(e),
+                )
+
+        # Phase 4: All models and keys failed
+        logger.error("All Gemini models and API keys failed.")
         return "[]"
 
     @staticmethod
