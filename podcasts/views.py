@@ -49,6 +49,7 @@ class EpisodeReprocessView(View):
         episode.status = Episode.Status.NEW
         episode.rehosted_audio_size = 0
         episode.ad_segments = None
+        episode.processing_metrics = None
         episode.save()
         return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": episode.podcast.id}))
 
@@ -79,6 +80,7 @@ class EpisodeToggleAIView(View):
             episode.rehosted_media_id = None
             episode.rehosted_audio_size = 0
             episode.ad_segments = None
+            episode.processing_metrics = None
 
         episode.save()
 
@@ -433,6 +435,7 @@ class PodcastReprocessView(View):
             episode.status = Episode.Status.NEW
             episode.rehosted_audio_size = 0
             episode.ad_segments = None
+            episode.processing_metrics = None
             episode.save()
         return redirect(reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id}))
 

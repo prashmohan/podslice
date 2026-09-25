@@ -587,3 +587,181 @@ class AdditionalTasksTest(PodcastTestCase):
         self.assertIn(stuck_ep.id, ep_ids)
         self.assertNotIn(recent_ep.id, ep_ids)
 
+
+@override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
+class EpisodeProcessorTestCase(PodcastTestCase):
+    """
+    Test cases for pipeline telemetry instrumentation and metrics recording.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.processor = EpisodeProcessor(self.episode)
+        self.ad_manager = AdManager(self.episode)
+
+    @mock.patch("podcasts.tasks.EpisodeProcessor._slice_and_save_audio")
+    @mock.patch("podcasts.tasks.AdManager.analyze_audio", return_value=[{"start": 10.0, "end": 20.0}])
+    @mock.patch("podcasts.tasks.EpisodeProcessor._get_audio_duration", return_value=60.0)
+    @mock.patch("podcasts.tasks.EpisodeProcessor._download_audio")
+    def test_rehost_audio_records_processing_metrics(
+        self, mock_download, mock_duration, mock_analyze, mock_slice
+    ):
+        self.processor.rehost_audio()
+        self.episode.refresh_from_db()
+        self.assertIsNotNone(self.episode.processing_metrics)
+        self.assertEqual(self.episode.processing_metrics["status"], "COMPLETE")
+        self.assertIn("stages", self.episode.processing_metrics)
+        self.assertEqual(self.episode.processing_metrics["stages"]["download"]["status"], "success")
+        self.assertEqual(self.episode.processing_metrics["stages"]["gemini"]["status"], "success")
+        self.assertEqual(self.episode.processing_metrics["stages"]["slicing"]["status"], "success")
+
+    @mock.patch("podcasts.tasks.EpisodeProcessor._download_audio", side_effect=Exception("Network failure"))
+    def test_rehost_audio_records_error_metrics_on_failure(self, mock_download):
+        self.processor.rehost_audio()
+        self.episode.refresh_from_db()
+        self.assertEqual(self.episode.status, Episode.Status.FAILED)
+        self.assertIsNotNone(self.episode.processing_metrics)
+        self.assertEqual(self.episode.processing_metrics["status"], "FAILED")
+        self.assertEqual(self.episode.processing_metrics["stages"]["download"]["status"], "failed")
+        self.assertIn("Network failure", self.episode.processing_metrics["unresolved_error"])
+
+    @mock.patch("podcasts.tasks.EpisodeProcessor._slice_and_save_audio")
+    @mock.patch("podcasts.tasks.EpisodeProcessor._get_audio_duration", return_value=60.0)
+    @mock.patch("podcasts.tasks.EpisodeProcessor._download_audio")
+    def test_rehost_audio_ai_disabled_skipped_metrics(
+        self, mock_download, mock_duration, mock_slice
+    ):
+        self.episode.disable_ai_processing = True
+        self.episode.save()
+        self.processor.rehost_audio()
+        self.episode.refresh_from_db()
+        self.assertIsNotNone(self.episode.processing_metrics)
+        self.assertEqual(self.episode.processing_metrics["status"], "COMPLETE")
+        gemini_stage = self.episode.processing_metrics["stages"]["gemini"]
+        self.assertEqual(gemini_stage["status"], "skipped")
+        self.assertEqual(gemini_stage["duration_sec"], 0.0)
+        self.assertIsNone(gemini_stage["error"])
+        self.assertEqual(
+            self.episode.processing_metrics["stages"]["slicing"]["status"],
+            "original_preserved",
+        )
+
+    @mock.patch(
+        "podcasts.tasks.EpisodeProcessor._slice_and_save_audio",
+        side_effect=Exception("FFmpeg slicing failed"),
+    )
+    @mock.patch(
+        "podcasts.tasks.AdManager.analyze_audio",
+        return_value=[{"start": 10.0, "end": 20.0}],
+    )
+    @mock.patch("podcasts.tasks.EpisodeProcessor._get_audio_duration", return_value=60.0)
+    @mock.patch("podcasts.tasks.EpisodeProcessor._download_audio")
+    def test_rehost_audio_slicing_failure_records_error(
+        self, mock_download, mock_duration, mock_analyze, mock_slice
+    ):
+        self.processor.rehost_audio()
+        self.episode.refresh_from_db()
+        self.assertEqual(self.episode.status, Episode.Status.FAILED)
+        self.assertIsNotNone(self.episode.processing_metrics)
+        self.assertEqual(self.episode.processing_metrics["status"], "FAILED")
+        self.assertEqual(
+            self.episode.processing_metrics["stages"]["slicing"]["status"], "failed"
+        )
+        self.assertIn(
+            "FFmpeg slicing failed",
+            self.episode.processing_metrics["unresolved_error"],
+        )
+
+    @mock.patch("podcasts.tasks.time.sleep")
+    @mock.patch("podcasts.tasks.genai.upload_file")
+    @mock.patch("podcasts.tasks.genai.GenerativeModel")
+    def test_gemini_telemetry_retry_and_recovery(
+        self, mock_model_cls, mock_upload, mock_sleep
+    ):
+        mock_upload.return_value = "fake_file"
+        mock_model_inst = mock.Mock()
+        mock_model_cls.return_value = mock_model_inst
+
+        # First call raises 429 ResourceExhausted, second call succeeds
+        rate_limit_err = Exception("429 ResourceExhausted: rate limit exceeded, retry in 5s")
+        mock_model_inst.generate_content.side_effect = [
+            rate_limit_err,
+            mock.Mock(text='[{"start": 10.0, "end": 20.0}]'),
+        ]
+
+        result = self.ad_manager._get_ad_segments_from_gemini("fake.mp3", 60.0)
+        self.assertEqual(result, '[{"start": 10.0, "end": 20.0}]')
+        self.assertIsNotNone(self.ad_manager.last_telemetry)
+        telemetry = self.ad_manager.last_telemetry
+        self.assertEqual(telemetry["retry_attempts"], 1)
+        self.assertTrue(telemetry["retry_recovered"])
+        self.assertFalse(telemetry["fallback_used"])
+        self.assertEqual(telemetry["model_used"], "gemini-3.8-flash")
+        self.assertEqual(len(telemetry["attempts"]), 2)
+        self.assertEqual(telemetry["attempts"][0]["status"], 429)
+        self.assertEqual(telemetry["attempts"][1]["status"], "success")
+
+    @mock.patch("podcasts.tasks.time.sleep")
+    @mock.patch("podcasts.tasks.genai.upload_file")
+    @mock.patch("podcasts.tasks.genai.GenerativeModel")
+    def test_gemini_telemetry_fallback_model_used(
+        self, mock_model_cls, mock_upload, mock_sleep
+    ):
+        mock_upload.return_value = "fake_file"
+        primary_inst = mock.Mock()
+        primary_inst.generate_content.side_effect = Exception("Primary model permanently down")
+        fallback_inst = mock.Mock()
+        fallback_inst.generate_content.return_value = mock.Mock(
+            text='[{"start": 5.0, "end": 15.0}]'
+        )
+
+        def model_side_effect(model_name, **kwargs):
+            if "lite" in model_name:
+                return fallback_inst
+            return primary_inst
+
+        mock_model_cls.side_effect = model_side_effect
+
+        result = self.ad_manager._get_ad_segments_from_gemini("fake.mp3", 60.0)
+        self.assertEqual(result, '[{"start": 5.0, "end": 15.0}]')
+        telemetry = self.ad_manager.last_telemetry
+        self.assertIsNotNone(telemetry)
+        self.assertTrue(telemetry["fallback_used"])
+        self.assertEqual(telemetry["model_used"], "gemini-3.5-flash-lite")
+
+    def test_views_reset_processing_metrics(self):
+        from django.test import RequestFactory
+        from podcasts.views import (
+            EpisodeReprocessView,
+            PodcastReprocessView,
+            EpisodeToggleAIView,
+        )
+
+        factory = RequestFactory()
+
+        # 1. EpisodeReprocessView
+        self.episode.processing_metrics = {"status": "COMPLETE"}
+        self.episode.save()
+        req = factory.post(f"/episodes/{self.episode.id}/reprocess/")
+        EpisodeReprocessView.as_view()(req, episode_id=self.episode.id)
+        self.episode.refresh_from_db()
+        self.assertIsNone(self.episode.processing_metrics)
+
+        # 2. PodcastReprocessView
+        self.episode.processing_metrics = {"status": "COMPLETE"}
+        self.episode.save()
+        req = factory.post(f"/podcasts/{self.podcast.id}/reprocess/")
+        PodcastReprocessView.as_view()(req, podcast_id=self.podcast.id)
+        self.episode.refresh_from_db()
+        self.assertIsNone(self.episode.processing_metrics)
+
+        # 3. EpisodeToggleAIView (disabling AI)
+        self.episode.disable_ai_processing = False
+        self.episode.processing_metrics = {"status": "COMPLETE"}
+        self.episode.save()
+        req = factory.post(f"/episodes/{self.episode.id}/toggle-ai/")
+        with mock.patch("podcasts.views.threading.Thread"):
+            EpisodeToggleAIView.as_view()(req, episode_id=self.episode.id)
+        self.episode.refresh_from_db()
+        self.assertIsNone(self.episode.processing_metrics)
+

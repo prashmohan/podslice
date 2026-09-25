@@ -81,6 +81,7 @@ class AdManager:
     def __init__(self, episode: Episode):
         """Initializes the AdManager."""
         self.episode = episode
+        self.last_telemetry: Optional[Dict[str, Any]] = None
 
     @staticmethod
     def _is_rate_limit_error(exc: Exception) -> bool:
@@ -156,6 +157,16 @@ class AdManager:
         self, audio_path: str, audio_duration_seconds: float
     ) -> str:
         """Sends audio to the Gemini API for ad detection with multi-key rotation and automatic fallback."""
+        gemini_telemetry: Dict[str, Any] = {
+            "attempts": [],
+            "retry_attempts": 0,
+            "retry_recovered": False,
+            "fallback_used": False,
+            "model_used": None,
+            "error": None,
+        }
+        self.last_telemetry = gemini_telemetry
+
         raw_keys = getattr(settings, "GEMINI_API_KEYS", None)
         api_keys = []
         if raw_keys:
@@ -171,6 +182,7 @@ class AdManager:
 
         if not api_keys:
             logger.error("No Gemini API keys configured.")
+            gemini_telemetry["error"] = "No Gemini API keys configured."
             return "[]"
 
         # Deduplicate keys while preserving order
@@ -194,19 +206,43 @@ class AdManager:
 
         uploaded_files: Dict[str, Any] = {}
 
+        def _mask_key(key: str) -> str:
+            return key[:6] + "..." if len(key) > 6 else key
+
         def _call_model_with_key(model_name: str, api_key: str) -> str:
-            genai.configure(api_key=api_key)
-            if api_key not in uploaded_files:
-                uploaded_files[api_key] = genai.upload_file(path=audio_path)
-            model = genai.GenerativeModel(
-                model_name,
-                generation_config={"response_mime_type": "application/json"},
-            )
-            response = model.generate_content([prompt, uploaded_files[api_key]])
-            return response.text
+            masked = _mask_key(api_key)
+            try:
+                genai.configure(api_key=api_key)
+                if api_key not in uploaded_files:
+                    uploaded_files[api_key] = genai.upload_file(path=audio_path)
+                model = genai.GenerativeModel(
+                    model_name,
+                    generation_config={"response_mime_type": "application/json"},
+                )
+                response = model.generate_content([prompt, uploaded_files[api_key]])
+                gemini_telemetry["attempts"].append({
+                    "model": model_name,
+                    "key_masked": masked,
+                    "status": "success",
+                })
+                gemini_telemetry["model_used"] = model_name
+                return response.text
+            except Exception as e:
+                is_429 = self._is_rate_limit_error(e)
+                attempt_entry = {
+                    "model": model_name,
+                    "key_masked": masked,
+                    "status": 429 if is_429 else "error",
+                    "error": type(e).__name__,
+                }
+                if is_429:
+                    attempt_entry["retry_delay"] = self._extract_retry_delay(e)
+                gemini_telemetry["attempts"].append(attempt_entry)
+                raise
 
         logger.debug("Attempting ad detection with Gemini.")
         retry_delays: List[float] = []
+        had_429 = False
 
         # Phase 1: Try Primary Model across all keys
         for api_key in api_keys:
@@ -215,19 +251,24 @@ class AdManager:
                     "Attempting ad detection with primary model: %s",
                     primary_model,
                 )
-                return _call_model_with_key(primary_model, api_key)
+                res = _call_model_with_key(primary_model, api_key)
+                if had_429:
+                    gemini_telemetry["retry_recovered"] = True
+                return res
             except Exception as e:
                 logger.warning(
                     "Gemini API call failed for model %s with key %s: %s",
                     primary_model,
-                    api_key[:6] + "..." if len(api_key) > 6 else api_key,
+                    _mask_key(api_key),
                     str(e),
                 )
                 if self._is_rate_limit_error(e):
+                    had_429 = True
                     retry_delays.append(self._extract_retry_delay(e))
 
         # Phase 2: If all keys failed on primary model and at least one was 429, retry primary once
         if retry_delays:
+            gemini_telemetry["retry_attempts"] += 1
             sleep_sec = min(min(retry_delays), max_retry_delay)
             sleep_sec = max(0.0, float(sleep_sec))
             logger.info(
@@ -242,35 +283,47 @@ class AdManager:
                         "Retrying ad detection with primary model: %s",
                         primary_model,
                     )
-                    return _call_model_with_key(primary_model, api_key)
+                    res = _call_model_with_key(primary_model, api_key)
+                    if had_429:
+                        gemini_telemetry["retry_recovered"] = True
+                    return res
                 except Exception as e:
                     logger.warning(
                         "Gemini API retry failed for model %s with key %s: %s",
                         primary_model,
-                        api_key[:6] + "..." if len(api_key) > 6 else api_key,
+                        _mask_key(api_key),
                         str(e),
                     )
+                    if self._is_rate_limit_error(e):
+                        had_429 = True
 
         # Phase 3: Fallback model across all keys
         logger.info(
             "Attempting ad detection with fallback model: %s", fallback_model
         )
+        gemini_telemetry["fallback_used"] = True
         for api_key in api_keys:
             try:
                 logger.info(
                     "Attempting ad detection with model: %s", fallback_model
                 )
-                return _call_model_with_key(fallback_model, api_key)
+                res = _call_model_with_key(fallback_model, api_key)
+                if had_429:
+                    gemini_telemetry["retry_recovered"] = True
+                return res
             except Exception as e:
                 logger.warning(
                     "Gemini API call failed for model %s with key %s: %s",
                     fallback_model,
-                    api_key[:6] + "..." if len(api_key) > 6 else api_key,
+                    _mask_key(api_key),
                     str(e),
                 )
+                if self._is_rate_limit_error(e):
+                    had_429 = True
 
         # Phase 4: All models and keys failed
         logger.error("All Gemini models and API keys failed.")
+        gemini_telemetry["error"] = "All Gemini models and API keys failed."
         return "[]"
 
     @staticmethod
@@ -782,6 +835,35 @@ class EpisodeProcessor:
     def rehost_audio(self, force=False):
         """Main method to process and re-host the audio for an episode."""
         audio_path = None
+        start_time = time.time()
+        metrics: Dict[str, Any] = {
+            "status": "PROCESSING",
+            "total_duration_sec": 0.0,
+            "stages": {
+                "download": {"status": "pending", "error": None, "duration_sec": 0.0},
+                "gemini": {
+                    "status": "pending",
+                    "model_used": None,
+                    "attempts_count": 0,
+                    "retry_attempts": 0,
+                    "retry_recovered": False,
+                    "fallback_used": False,
+                    "attempts": [],
+                    "error": None,
+                    "duration_sec": 0.0,
+                },
+                "slicing": {
+                    "status": "pending",
+                    "ads_detected": 0,
+                    "removed_duration_sec": 0.0,
+                    "error": None,
+                    "duration_sec": 0.0,
+                },
+            },
+            "unresolved_error": None,
+        }
+        current_stage = "download"
+        t_stage_start = start_time
         try:
             if not force and self.episode.status in [
                 Episode.Status.DOWNLOADING,
@@ -801,11 +883,38 @@ class EpisodeProcessor:
                 self.episode.podcast.title,
             )
 
+            # Stage 1: Download & Duration
+            current_stage = "download"
+            t_stage_start = time.time()
             prepared_audio = self._fetch_and_prepare_audio()
+            download_duration = round(time.time() - t_stage_start, 2)
             if not prepared_audio:
+                if self.episode.status == Episode.Status.FAILED:
+                    metrics["stages"]["download"] = {
+                        "status": "failed",
+                        "error": "Failed to download audio or determine duration",
+                        "duration_sec": download_duration,
+                    }
+                    metrics["status"] = "FAILED"
+                    metrics["unresolved_error"] = "Failed to download audio or determine duration"
+                    metrics["total_duration_sec"] = round(time.time() - start_time, 2)
+                    self.episode.processing_metrics = metrics
+                    Episode.objects.filter(id=self.episode.id).update(
+                        status=Episode.Status.FAILED,
+                        processing_metrics=metrics,
+                    )
                 return
-            audio_path, audio_duration_seconds = prepared_audio
 
+            audio_path, audio_duration_seconds = prepared_audio
+            metrics["stages"]["download"] = {
+                "status": "success",
+                "error": None,
+                "duration_sec": download_duration,
+            }
+
+            # Stage 2: Gemini AI Analysis
+            current_stage = "gemini"
+            t_stage_start = time.time()
             self._update_status(Episode.Status.PROCESSING)
             if self.episode.disable_ai_processing:
                 logger.info(
@@ -813,35 +922,148 @@ class EpisodeProcessor:
                     self.episode.title,
                 )
                 ad_segments_list = []
+                metrics["stages"]["gemini"] = {
+                    "status": "skipped",
+                    "error": None,
+                    "duration_sec": 0.0,
+                }
             else:
                 ad_segments_list = self.ad_manager.analyze_audio(
                     audio_path, audio_duration_seconds
                 )
+                gemini_duration = round(time.time() - t_stage_start, 2)
+                if self.ad_manager and getattr(self.ad_manager, "last_telemetry", None):
+                    gemini_metrics = dict(self.ad_manager.last_telemetry)
+                    gemini_metrics["attempts_count"] = len(gemini_metrics.get("attempts", []))
+                    gemini_metrics["duration_sec"] = gemini_duration
+                    if not gemini_metrics.get("status"):
+                        gemini_metrics["status"] = "failed" if gemini_metrics.get("error") else "success"
+                else:
+                    gemini_metrics = {
+                        "status": "success",
+                        "model_used": getattr(settings, "GEMINI_MODEL", "gemini-3.8-flash"),
+                        "attempts_count": 1,
+                        "retry_attempts": 0,
+                        "retry_recovered": False,
+                        "fallback_used": False,
+                        "attempts": [],
+                        "error": None,
+                        "duration_sec": gemini_duration,
+                    }
+                metrics["stages"]["gemini"] = gemini_metrics
+                if self.episode.status == Episode.Status.FAILED or gemini_metrics.get("status") == "failed":
+                    raise RuntimeError(gemini_metrics.get("error") or "Gemini analysis failed")
+
             logger.info(
                 "Finished Ad analysis audio for '%s' from podcast '%s'.",
                 self.episode.title,
                 self.episode.podcast.title,
             )
 
+            # Stage 3: Slicing
+            current_stage = "slicing"
+            t_stage_start = time.time()
             self._slice_and_save_audio(
                 audio_path, ad_segments_list, audio_duration_seconds
             )
+            slicing_duration = round(time.time() - t_stage_start, 2)
+            ads_count = len(ad_segments_list) if ad_segments_list else 0
+            removed_sec = round(
+                sum(
+                    seg.get("end", 0.0) - seg.get("start", 0.0)
+                    for seg in ad_segments_list
+                ),
+                2,
+            ) if ads_count > 0 else 0.0
+            metrics["stages"]["slicing"] = {
+                "status": "success" if ads_count > 0 else "original_preserved",
+                "ads_detected": ads_count,
+                "removed_duration_sec": removed_sec,
+                "error": None,
+                "duration_sec": slicing_duration,
+            }
             logger.info(
                 "Finished slicing audio for '%s' from podcast '%s'.",
                 self.episode.title,
                 self.episode.podcast.title,
             )
 
-        except Exception:
+            # Complete
+            total_duration = round(time.time() - start_time, 2)
+            metrics["status"] = "COMPLETE"
+            metrics["total_duration_sec"] = total_duration
+            metrics["unresolved_error"] = None
+            self.episode.processing_metrics = metrics
+            self._update_status(Episode.Status.COMPLETE, save=False)
+            Episode.objects.filter(id=self.episode.id).update(
+                status=Episode.Status.COMPLETE,
+                processing_metrics=metrics,
+            )
+
+        except Exception as e:
             logger.error(
                 "An unexpected error occurred during rehosting of '%s'",
                 self.episode.title,
                 exc_info=True,
             )
-            self._update_status(Episode.Status.FAILED)
+            stage_duration = round(time.time() - t_stage_start, 2)
+            if current_stage == "download":
+                metrics["stages"]["download"] = {
+                    "status": "failed",
+                    "error": str(e),
+                    "duration_sec": stage_duration,
+                }
+            elif current_stage == "gemini":
+                if self.ad_manager and getattr(self.ad_manager, "last_telemetry", None):
+                    gemini_metrics = dict(self.ad_manager.last_telemetry)
+                    gemini_metrics["attempts_count"] = len(gemini_metrics.get("attempts", []))
+                else:
+                    gemini_metrics = {
+                        "model_used": None,
+                        "attempts_count": 0,
+                        "retry_attempts": 0,
+                        "retry_recovered": False,
+                        "fallback_used": False,
+                        "attempts": [],
+                    }
+                gemini_metrics["status"] = "failed"
+                gemini_metrics["error"] = str(e)
+                gemini_metrics["duration_sec"] = stage_duration
+                metrics["stages"]["gemini"] = gemini_metrics
+            elif current_stage == "slicing":
+                ads_count = len(ad_segments_list) if "ad_segments_list" in locals() and ad_segments_list else 0
+                removed_sec = round(
+                    sum(
+                        seg.get("end", 0.0) - seg.get("start", 0.0)
+                        for seg in ad_segments_list
+                    ),
+                    2,
+                ) if ads_count > 0 else 0.0
+                metrics["stages"]["slicing"] = {
+                    "status": "failed",
+                    "ads_detected": ads_count,
+                    "removed_duration_sec": removed_sec,
+                    "error": str(e),
+                    "duration_sec": stage_duration,
+                }
+
+            total_duration = round(time.time() - start_time, 2)
+            metrics["status"] = "FAILED"
+            metrics["total_duration_sec"] = total_duration
+            metrics["unresolved_error"] = str(e)
+            self.episode.processing_metrics = metrics
+            self._update_status(Episode.Status.FAILED, save=False)
+            Episode.objects.filter(id=self.episode.id).update(
+                status=Episode.Status.FAILED,
+                processing_metrics=metrics,
+            )
         finally:
-            if audio_path and os.path.exists(audio_path):
-                os.remove(audio_path)
+            if audio_path:
+                try:
+                    if os.path.exists(audio_path):
+                        os.remove(audio_path)
+                except (FileNotFoundError, OSError, TypeError):
+                    pass
             logger.info(
                 "Finished rehost task for Episode '%s' (%s).",
                 self.episode.title,
