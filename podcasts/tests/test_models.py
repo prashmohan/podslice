@@ -47,3 +47,28 @@ class PodcastModelTest(TestCase):
         self.assertIsInstance(podcast, Podcast)
         self.assertEqual(str(podcast), "Test Podcast")
 
+
+class EpisodeProcessingMetricsModelTest(TestCase):
+    def test_processing_metrics_field_persists_json(self):
+        podcast = Podcast.objects.create(title="P", rss_url="http://example.com/rss")
+        payload = {
+            "status": "COMPLETE",
+            "total_duration_sec": 10.5,
+            "stages": {
+                "download": {"status": "success"},
+                "gemini": {"status": "success", "model_used": "gemini-3.8-flash"},
+                "slicing": {"status": "success"}
+            }
+        }
+        episode = Episode.objects.create(
+            podcast=podcast,
+            title="E",
+            guid="g-test",
+            pub_date="2026-09-25T00:00:00Z",
+            original_audio_url="http://example.com/a.mp3",
+            processing_metrics=payload
+        )
+        episode.refresh_from_db()
+        self.assertEqual(episode.processing_metrics["status"], "COMPLETE")
+        self.assertEqual(episode.processing_metrics["stages"]["gemini"]["model_used"], "gemini-3.8-flash")
+

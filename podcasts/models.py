@@ -105,6 +105,11 @@ class Episode(models.Model):
         default=False,
         help_text="If True, AI analysis will be skipped and original audio will be rehosted as-is."
     )
+    processing_metrics = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Telemetry and execution metrics recorded during episode processing.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
