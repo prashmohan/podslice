@@ -22,6 +22,7 @@ from rest_framework import generics, serializers
 from podcasts.forms import OPMLImportForm, PodcastSettingsForm
 from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.serializers import PodcastSerializer
+from podcasts.services import MetricsService
 from podcasts.tasks import (
     delete_podcast_data,
     poll_feed,
@@ -292,7 +293,8 @@ class PodcastSubscribeUIView(View):
         context = {
             'podcasts': podcasts,
             'last_polled_time': last_polled_time.last_polled if last_polled_time else None,
-            'pending_episodes': pending_episodes
+            'pending_episodes': pending_episodes,
+            'metrics': MetricsService.get_system_metrics(),
         }
         return render(request, "podcasts/subscribe.html", context)
 
@@ -303,11 +305,15 @@ class PodcastSubscribeUIView(View):
         rss_url = request.POST.get("rss_url")
         download_all = "download_all" in request.POST
         if not rss_url:
-            podcasts = Podcast.objects.all()
+            podcasts = Podcast.objects.all().order_by('title')
             return render(
                 request,
                 "podcasts/subscribe.html",
-                {"error": "RSS URL is required.", "podcasts": podcasts},
+                {
+                    "error": "RSS URL is required.",
+                    "podcasts": podcasts,
+                    "metrics": MetricsService.get_system_metrics(),
+                },
             )
 
         try:
@@ -316,11 +322,16 @@ class PodcastSubscribeUIView(View):
                 reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id})
             )
         except (ValueError, IOError) as e:
-            podcasts = Podcast.objects.all()
+            podcasts = Podcast.objects.all().order_by('title')
             return render(
                 request,
                 "podcasts/subscribe.html",
-                {"error": str(e), "rss_url": rss_url, "podcasts": podcasts},
+                {
+                    "error": str(e),
+                    "rss_url": rss_url,
+                    "podcasts": podcasts,
+                    "metrics": MetricsService.get_system_metrics(),
+                },
             )
 
 
@@ -370,6 +381,36 @@ class PodcastStatusUIView(View):
                         e,
                     )
                     episode.removed_duration_str = "Error"
+
+            episode.model_used = None
+            episode.retry_recovered = False
+            episode.failed_stage = None
+            episode.duration_sec = None
+
+            if isinstance(episode.processing_metrics, dict):
+                pm = episode.processing_metrics
+                episode.duration_sec = pm.get("total_duration_sec")
+                stages = pm.get("stages") or {}
+                gemini_stage = stages.get("gemini") or {}
+                episode.model_used = gemini_stage.get("model_used")
+                if not episode.model_used and gemini_stage.get("attempts"):
+                    for att in reversed(gemini_stage.get("attempts")):
+                        if isinstance(att, dict) and att.get("status") in ("success", 200, "200") and att.get("model"):
+                            episode.model_used = att.get("model")
+                            break
+                episode.retry_recovered = bool(gemini_stage.get("retry_recovered"))
+
+                if episode.status == Episode.Status.FAILED or pm.get("status") == "FAILED":
+                    download_stage = stages.get("download") or {}
+                    slicing_stage = stages.get("slicing") or {}
+                    if download_stage.get("status") == "failed" or download_stage.get("error"):
+                        episode.failed_stage = "Download"
+                    elif gemini_stage.get("status") == "failed" or gemini_stage.get("error"):
+                        episode.failed_stage = "Gemini"
+                    elif slicing_stage.get("status") == "failed" or slicing_stage.get("error"):
+                        episode.failed_stage = "Slicing"
+                    else:
+                        episode.failed_stage = "Pipeline"
 
         podcast.rehosted_rss_url = f"{settings.REHOST_BASE_URL}{reverse('podcast-rss-feed-api', args=[podcast.id])}"
         settings_form = PodcastSettingsForm(instance=podcast)

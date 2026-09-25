@@ -78,6 +78,18 @@
                             {% if episode.disable_ai_processing %}
                                 <span class="badge bg-dark">AI Disabled</span>
                             {% endif %}
+                            {% if episode.model_used %}
+                                <span class="badge {% if episode.model_used == 'gemini-3.5-flash-lite' %}bg-warning text-dark{% else %}bg-primary{% endif %}">{{ episode.model_used }}</span>
+                            {% endif %}
+                            {% if episode.retry_recovered %}
+                                <span class="badge bg-info text-dark">429 Recovered</span>
+                            {% endif %}
+                            {% if episode.failed_stage %}
+                                <span class="badge bg-danger">Failed at {{ episode.failed_stage }}</span>
+                            {% endif %}
+                            {% if episode.duration_sec is not None %}
+                                <small class="text-muted ms-2">Processed in {{ episode.duration_sec }}s</small>
+                            {% endif %}
                         </p>
                         <div class="mt-2">
                             <small class="text-muted">

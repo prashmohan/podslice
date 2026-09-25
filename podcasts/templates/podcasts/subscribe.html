@@ -59,6 +59,73 @@
             </div>
         </div>
 
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <h3 class="card-title mb-0">Processing & AI Health</h3>
+                <span class="badge bg-secondary">{{ metrics.total_episodes_processed|default:0 }} Processed</span>
+            </div>
+            <div class="card-body">
+                <div class="row text-center mb-3">
+                    <div class="col-md-3 col-6 mb-2">
+                        <div class="p-2 border rounded bg-light">
+                            <small class="text-muted d-block text-uppercase fw-bold" style="font-size: 0.75rem;">429 Retry Recovery</small>
+                            <span class="badge fs-6 {% if metrics.retry_recovery_rate_pct >= 80 %}bg-success{% elif metrics.retry_recovery_rate_pct >= 50 %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                                {{ metrics.retry_recovery_rate_pct|default:"100.0" }}%
+                            </span>
+                            <div class="small text-muted mt-1">{{ metrics.retries_recovered|default:0 }} of {{ metrics.rate_limits_encountered|default:0 }} recovered</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6 mb-2">
+                        <div class="p-2 border rounded bg-light">
+                            <small class="text-muted d-block text-uppercase fw-bold" style="font-size: 0.75rem;">Fallback Model Usage</small>
+                            <span class="badge fs-6 bg-info text-dark">
+                                {{ metrics.fallback_model_pct|default:"0.0" }}%
+                            </span>
+                            <div class="small text-muted mt-1">{{ metrics.fallback_model_used|default:0 }} fallback invocations</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6 mb-2">
+                        <div class="p-2 border rounded bg-light">
+                            <small class="text-muted d-block text-uppercase fw-bold" style="font-size: 0.75rem;">Clean Runs</small>
+                            <span class="badge fs-6 bg-primary">
+                                {{ metrics.clean_runs_pct|default:"100.0" }}%
+                            </span>
+                            <div class="small text-muted mt-1">{{ metrics.clean_runs_count|default:0 }} of {{ metrics.total_episodes_processed|default:0 }} clean</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-6 mb-2">
+                        <div class="p-2 border rounded bg-light">
+                            <small class="text-muted d-block text-uppercase fw-bold" style="font-size: 0.75rem;">Unresolved Failures</small>
+                            <span class="badge fs-6 {% if metrics.unresolved_failures > 0 %}bg-danger{% else %}bg-secondary{% endif %}">
+                                {{ metrics.unresolved_failures|default:0 }}
+                            </span>
+                            <div class="small text-muted mt-1">Permanent failures</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card bg-light border-0">
+                    <div class="card-body py-2 px-3">
+                        <strong class="small text-muted text-uppercase d-block mb-1">Stage Error Breakdown</strong>
+                        <div class="row text-center">
+                            <div class="col-4">
+                                <span class="text-muted small">Download:</span>
+                                <span class="badge {% if metrics.stage_failures.download > 0 %}bg-danger{% else %}bg-secondary{% endif %} ms-1">{{ metrics.stage_failures.download|default:0 }}</span>
+                            </div>
+                            <div class="col-4">
+                                <span class="text-muted small">Gemini:</span>
+                                <span class="badge {% if metrics.stage_failures.gemini > 0 %}bg-danger{% else %}bg-secondary{% endif %} ms-1">{{ metrics.stage_failures.gemini|default:0 }}</span>
+                            </div>
+                            <div class="col-4">
+                                <span class="text-muted small">Slicing:</span>
+                                <span class="badge {% if metrics.stage_failures.slicing > 0 %}bg-danger{% else %}bg-secondary{% endif %} ms-1">{{ metrics.stage_failures.slicing|default:0 }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         {% if pending_episodes %}
         <div class="card shadow-sm mb-4">
             <div class="card-header">

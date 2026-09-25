@@ -441,3 +441,78 @@ class AdditionalPodcastViewsTest(PodcastTestCase):
         url = reverse("serve_media_episode", kwargs={"media_guid": uuid.uuid4()})
         response = self.client.get(url)
         self.assertEqual(response.status_code, 404)
+
+
+class PodcastSubscribeUIViewTest(PodcastTestCase):
+    """
+    Tests for PodcastSubscribeUIView rendering metrics and health dashboard.
+    """
+
+    def test_subscribe_ui_renders_health_dashboard(self):
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("metrics", response.context)
+        self.assertContains(response, "Processing & AI Health")
+        self.assertContains(response, "429 Retry Recovery")
+
+
+class PodcastStatusUIViewTest(PodcastTestCase):
+    """
+    Tests for PodcastStatusUIView rendering episode telemetry badges.
+    """
+
+    def test_podcast_status_ui_renders_episode_telemetry(self):
+        self.episode.processing_metrics = {
+            "status": "COMPLETE",
+            "total_duration_sec": 7.5,
+            "stages": {
+                "gemini": {
+                    "model_used": "gemini-3.8-flash",
+                    "retry_recovered": True,
+                }
+            },
+        }
+        self.episode.save()
+        response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "gemini-3.8-flash")
+        self.assertContains(response, "429 Recovered")
+        self.assertContains(response, "Processed in 7.5s")
+
+    def test_podcast_status_ui_renders_fallback_model_badge(self):
+        self.episode.processing_metrics = {
+            "status": "COMPLETE",
+            "total_duration_sec": 5.2,
+            "stages": {
+                "gemini": {
+                    "model_used": "gemini-3.5-flash-lite",
+                    "fallback_used": True,
+                }
+            },
+        }
+        self.episode.save()
+        response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "gemini-3.5-flash-lite")
+        self.assertContains(response, "bg-warning")
+
+    def test_podcast_status_ui_renders_failed_stage_badge(self):
+        self.episode.status = Episode.Status.FAILED
+        self.episode.processing_metrics = {
+            "status": "FAILED",
+            "stages": {
+                "download": {"status": "failed", "error": "HTTP 404"},
+            },
+        }
+        self.episode.save()
+        response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Failed at Download")
+
+    def test_podcast_status_ui_renders_without_processing_metrics(self):
+        self.episode.processing_metrics = None
+        self.episode.save()
+        response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "429 Recovered")
+
