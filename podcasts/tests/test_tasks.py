@@ -672,12 +672,20 @@ class EpisodeProcessorTestCase(PodcastTestCase):
             self.episode.processing_metrics["unresolved_error"],
         )
 
+    @override_settings(
+        GEMINI_API_KEYS=["test-key-1"],
+        GEMINI_MODEL="gemini-3.8-flash",
+        FALLBACK_GEMINI_MODEL="gemini-3.5-flash-lite",
+    )
     @mock.patch("podcasts.tasks.time.sleep")
     @mock.patch("podcasts.tasks.genai.upload_file")
     @mock.patch("podcasts.tasks.genai.GenerativeModel")
     def test_gemini_telemetry_retry_and_recovery(
         self, mock_model_cls, mock_upload, mock_sleep
     ):
+        """
+        Verify telemetry records 429 retries and marks retry_recovered as True on recovery.
+        """
         mock_upload.return_value = "fake_file"
         mock_model_inst = mock.Mock()
         mock_model_cls.return_value = mock_model_inst
@@ -701,12 +709,20 @@ class EpisodeProcessorTestCase(PodcastTestCase):
         self.assertEqual(telemetry["attempts"][0]["status"], 429)
         self.assertEqual(telemetry["attempts"][1]["status"], "success")
 
+    @override_settings(
+        GEMINI_API_KEYS=["test-key-1"],
+        GEMINI_MODEL="gemini-3.8-flash",
+        FALLBACK_GEMINI_MODEL="gemini-3.5-flash-lite",
+    )
     @mock.patch("podcasts.tasks.time.sleep")
     @mock.patch("podcasts.tasks.genai.upload_file")
     @mock.patch("podcasts.tasks.genai.GenerativeModel")
     def test_gemini_telemetry_fallback_model_used(
         self, mock_model_cls, mock_upload, mock_sleep
     ):
+        """
+        Verify telemetry records fallback model usage when primary model fails permanently.
+        """
         mock_upload.return_value = "fake_file"
         primary_inst = mock.Mock()
         primary_inst.generate_content.side_effect = Exception("Primary model permanently down")
@@ -730,6 +746,9 @@ class EpisodeProcessorTestCase(PodcastTestCase):
         self.assertEqual(telemetry["model_used"], "gemini-3.5-flash-lite")
 
     def test_views_reset_processing_metrics(self):
+        """
+        Verify views properly reset processing_metrics to None on reprocess or AI toggle.
+        """
         from django.test import RequestFactory
         from podcasts.views import (
             EpisodeReprocessView,
@@ -764,4 +783,3 @@ class EpisodeProcessorTestCase(PodcastTestCase):
             EpisodeToggleAIView.as_view()(req, episode_id=self.episode.id)
         self.episode.refresh_from_db()
         self.assertIsNone(self.episode.processing_metrics)
-

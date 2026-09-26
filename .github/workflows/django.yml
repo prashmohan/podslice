@@ -31,8 +31,8 @@ jobs:
       env:
         DJANGO_SECRET_KEY: 'a-dummy-secret-key-for-testing'
         GEMINI_API_KEY: 'a-dummy-gemini-key-for-testing'
-        GEMINI_MODEL: 'a-dummy-gemini-key-for-testing'
-        FALLBACK_GEMINI_MODEL: 'a-dummy-fallback-key-for-testing'
+        GEMINI_MODEL: 'gemini-3.8-flash'
+        FALLBACK_GEMINI_MODEL: 'gemini-3.5-flash-lite'
         REHOST_BASE_URL: 'http://localhost:8000'
         SECURE_SSL_REDIRECT: 'False'
       run: |
