@@ -110,6 +110,36 @@ class PollingThreadTest(PodcastTestCase):
         self.assertEqual(Episode.objects.filter(podcast=podcast).count(), 15)
         mock_submit.assert_not_called()
 
+    @mock.patch("podcasts.tasks.DOWNLOAD_POOL.submit")
+    @mock.patch("podcasts.tasks.feedparser")
+    def test_poll_feed_respects_max_episodes_limit(self, mock_feedparser, mock_submit):
+        """Test that regular poll_feed (download_all=False) processes up to max_episodes entries."""
+        Episode.objects.all().delete()
+        podcast = self.podcast
+        mock_feed = mock.Mock()
+        mock_feed.bozo = False
+
+        entries = []
+        for i in range(12):
+            entry = {
+                "id": f"guid-poll-{i}",
+                "title": f"Episode {i}",
+                "enclosures": [{"href": f"http://example.com/audio-{i}.mp3", "type": "audio/mpeg"}],
+                "published_parsed": timezone.now().timetuple(),
+            }
+            entries.append(entry)
+
+        mock_feed.entries = entries
+        mock_feedparser.parse.return_value = mock_feed
+
+        podcast.max_episodes = 10
+        podcast.save()
+        poll_feed(podcast.id, download_all=False)
+
+        self.assertEqual(Episode.objects.filter(podcast=podcast).count(), 10)
+        mock_submit.assert_not_called()
+
+
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
 class RaceConditionPreventionTest(PodcastTestCase):

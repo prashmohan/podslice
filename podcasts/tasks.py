@@ -1218,7 +1218,10 @@ class FeedManager:
         """Processes the entries in the feed, creating new episodes as needed."""
         new_episodes_count = 0
         skipped_episodes_count = 0
-        limit = None if download_all else EPISODES_PER_FEED
+        if download_all or self.podcast.max_episodes == 0:
+            limit = None
+        else:
+            limit = max(EPISODES_PER_FEED, self.podcast.max_episodes)
         logger.info(
             "Processing the latest %s episodes from '%s'.",
             "all" if limit is None else str(limit),
