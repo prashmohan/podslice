@@ -640,6 +640,11 @@ def serve_rehosted_media(request, media_guid):
                 media_guid,
                 media_item.file_path,
             )
+            if request.method == "HEAD":
+                response = HttpResponse(status=200, content_type=media_item.content_type)
+                response["Content-Length"] = str(os.path.getsize(media_item.file_path))
+                response["Accept-Ranges"] = "bytes"
+                return response
             with open(media_item.file_path, "rb") as f:
                 buffer = io.BytesIO(f.read())
             return FileResponse(buffer, content_type=media_item.content_type)
@@ -657,6 +662,11 @@ def serve_rehosted_media(request, media_guid):
             try:
                 media_item = RehostedMedia.objects.get(pk=media_guid)
                 if os.path.exists(media_item.file_path):
+                    if request.method == "HEAD":
+                        response = HttpResponse(status=200, content_type=media_item.content_type)
+                        response["Content-Length"] = str(os.path.getsize(media_item.file_path))
+                        response["Accept-Ranges"] = "bytes"
+                        return response
                     with open(media_item.file_path, "rb") as f:
                         buffer = io.BytesIO(f.read())
                     return FileResponse(buffer, content_type=media_item.content_type)
@@ -664,7 +674,21 @@ def serve_rehosted_media(request, media_guid):
                 pass
             raise Http404("Media is complete but file not found on disk.")
 
-        elif status in [Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING]:
+        # Ignore HEAD requests for un-processed or in-progress episodes to prevent
+        # podcast aggregators/players probing enclosure sizes from triggering expensive processing
+        if request.method == "HEAD":
+            response = HttpResponse(status=200, content_type="audio/mpeg")
+            response["Accept-Ranges"] = "bytes"
+            if episode.rehosted_audio_size:
+                response["Content-Length"] = str(episode.rehosted_audio_size)
+            elif episode.duration_seconds:
+                approx_bytes = int(episode.duration_seconds * 16000)
+                response["Content-Length"] = str(approx_bytes)
+            else:
+                response["Content-Length"] = "0"
+            return response
+
+        if status in [Episode.Status.DOWNLOADING, Episode.Status.ANALYZING, Episode.Status.PROCESSING]:
             from django.utils import timezone
             # Check if it has been stuck for more than 20 minutes
             if timezone.now() - episode.updated_at > timezone.timedelta(minutes=20):

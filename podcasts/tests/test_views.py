@@ -237,6 +237,30 @@ class PodcastViewsTest(TestCase):
             kwargs={"force": True}
         )
 
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_serve_rehosted_media_head_does_not_trigger_processing(self, mock_thread_class):
+        """
+        Verify that a HEAD request on a NEW episode does NOT trigger background rehosting
+        or change episode status, but returns HTTP 200.
+        """
+        episode = self.podcast.episodes.create(
+            title="Probe Episode",
+            guid="probe-1",
+            original_audio_url="http://example.com/probe.mp3",
+            status=Episode.Status.NEW,
+            pub_date=timezone.now(),
+        )
+        url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
+        response = self.client.head(url)
+
+        self.assertEqual(response.status_code, 200)  # pylint: disable=no-member
+        self.assertEqual(response.headers.get("Content-Type"), "audio/mpeg")
+        self.assertEqual(response.headers.get("Accept-Ranges"), "bytes")
+        mock_thread_class.assert_not_called()
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.NEW)
+
     def test_serve_rehosted_media_complete_status(self):
         """
         Test that accessing a COMPLETE status episode serves it directly without reprocessing.
@@ -516,3 +540,21 @@ class PodcastStatusUIViewTest(PodcastTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "429 Recovered")
 
+    def test_podcast_status_ui_audio_tag_only_rendered_for_complete_episodes(self):
+        """
+        Verify that <audio> player is only rendered when episode status is COMPLETE,
+        and not rendered when status is NEW or FAILED.
+        """
+        # Status NEW: should NOT contain <audio controls
+        self.episode.status = Episode.Status.NEW
+        self.episode.save()
+        response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "<audio controls")
+
+        # Status COMPLETE: should contain <audio controls
+        self.episode.status = Episode.Status.COMPLETE
+        self.episode.save()
+        response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "<audio controls")

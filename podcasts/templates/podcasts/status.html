@@ -109,7 +109,7 @@
                                 {% endif %}
                             </form>
                         </div>
-                        {% if episode.rehosted_media_id %}
+                        {% if episode.status == 'COMPLETE' and episode.rehosted_media_id %}
                             <audio controls preload="none" class="mt-2" style="width: 100%;">
                                 <source src="{% url 'serve_media_episode' episode.rehosted_media_id %}" type="audio/mpeg">
                                 Your browser does not support the audio element.
