@@ -469,7 +469,8 @@ class AdditionalPodcastViewsTest(PodcastTestCase):
 
 class PodcastSubscribeUIViewTest(PodcastTestCase):
     """
-    Tests for PodcastSubscribeUIView rendering metrics and health dashboard.
+    Tests for PodcastSubscribeUIView rendering metrics and health dashboard,
+    as well as pagination, sorting, and filtering of pending episodes.
     """
 
     def test_subscribe_ui_renders_health_dashboard(self):
@@ -478,6 +479,216 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertIn("metrics", response.context)
         self.assertContains(response, "Processing & AI Health")
         self.assertContains(response, "429 Retry Recovery")
+
+    def test_pending_episodes_pagination(self):
+        """
+        Verify that pending episodes are paginated (10 per page by default).
+        """
+        # Create 14 additional pending episodes (we already have 1 from setUp)
+        base_time = timezone.now()
+        for i in range(14):
+            Episode.objects.create(
+                podcast=self.podcast,
+                title=f"Pending Episode {i+2:02d}",
+                guid=f"guid-pending-{i+2}",
+                original_audio_url=f"http://example.com/ep{i+2}.mp3",
+                pub_date=base_time + timezone.timedelta(minutes=i + 1),
+                status=Episode.Status.NEW,
+            )
+
+        # Page 1
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        pending_page = response.context["pending_episodes"]
+        self.assertEqual(len(pending_page), 10)
+        self.assertTrue(pending_page.has_next())
+        self.assertFalse(pending_page.has_previous())
+        self.assertEqual(pending_page.paginator.num_pages, 2)
+        self.assertEqual(pending_page.paginator.count, 15)
+
+        # Page 2
+        response_p2 = self.client.get(reverse("podcast-subscribe-ui") + "?page=2")
+        self.assertEqual(response_p2.status_code, 200)
+        pending_page_2 = response_p2.context["pending_episodes"]
+        self.assertEqual(len(pending_page_2), 5)
+        self.assertFalse(pending_page_2.has_next())
+        self.assertTrue(pending_page_2.has_previous())
+
+        # Out-of-bounds page should return the last page
+        response_invalid = self.client.get(reverse("podcast-subscribe-ui") + "?page=999")
+        self.assertEqual(response_invalid.status_code, 200)
+        pending_page_invalid = response_invalid.context["pending_episodes"]
+        self.assertEqual(pending_page_invalid.number, 2)
+
+    def test_pending_episodes_filter_by_status(self):
+        """
+        Verify filtering pending episodes by specific pending status.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Downloading Episode",
+            guid="guid-dl",
+            original_audio_url="http://example.com/dl.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.DOWNLOADING,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Processing Episode",
+            guid="guid-proc",
+            original_audio_url="http://example.com/proc.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.PROCESSING,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Completed Episode",
+            guid="guid-done",
+            original_audio_url="http://example.com/done.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?status=DOWNLOADING")
+        self.assertEqual(response.status_code, 200)
+        episodes = list(response.context["pending_episodes"])
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0].title, "Downloading Episode")
+
+    def test_pending_episodes_filter_by_podcast(self):
+        """
+        Verify filtering pending episodes by podcast ID.
+        """
+        podcast2 = Podcast.objects.create(title="Second Podcast", rss_url="http://example.com/p2.xml")
+        Episode.objects.create(
+            podcast=podcast2,
+            title="Second Podcast Pending Episode",
+            guid="guid-p2-ep",
+            original_audio_url="http://example.com/p2ep.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.NEW,
+        )
+
+        response = self.client.get(reverse("podcast-subscribe-ui") + f"?podcast_id={podcast2.id}")
+        self.assertEqual(response.status_code, 200)
+        episodes = list(response.context["pending_episodes"])
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0].podcast.id, podcast2.id)
+
+    def test_pending_episodes_filter_by_search(self):
+        """
+        Verify searching pending episodes by episode title.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Kubernetes Deep Dive",
+            guid="guid-k8s",
+            original_audio_url="http://example.com/k8s.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.NEW,
+        )
+
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?q=Kubernetes")
+        self.assertEqual(response.status_code, 200)
+        episodes = list(response.context["pending_episodes"])
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0].title, "Kubernetes Deep Dive")
+
+    def test_pending_episodes_sorting(self):
+        """
+        Verify sorting pending episodes by title and pub_date ascending/descending.
+        """
+        now = timezone.now()
+        Episode.objects.all().delete()
+
+        ep_a = Episode.objects.create(
+            podcast=self.podcast,
+            title="Alpha Episode",
+            guid="guid-a",
+            original_audio_url="http://example.com/a.mp3",
+            pub_date=now - timezone.timedelta(days=2),
+            status=Episode.Status.NEW,
+        )
+        ep_b = Episode.objects.create(
+            podcast=self.podcast,
+            title="Beta Episode",
+            guid="guid-b",
+            original_audio_url="http://example.com/b.mp3",
+            pub_date=now - timezone.timedelta(days=1),
+            status=Episode.Status.DOWNLOADING,
+        )
+
+        # Sort by title desc
+        res_title_desc = self.client.get(reverse("podcast-subscribe-ui") + "?sort=title&order=desc")
+        episodes = list(res_title_desc.context["pending_episodes"])
+        self.assertEqual([e.id for e in episodes], [ep_b.id, ep_a.id])
+
+        # Sort by title asc
+        res_title_asc = self.client.get(reverse("podcast-subscribe-ui") + "?sort=title&order=asc")
+        episodes = list(res_title_asc.context["pending_episodes"])
+        self.assertEqual([e.id for e in episodes], [ep_a.id, ep_b.id])
+
+        # Sort by pub_date desc
+        res_date_desc = self.client.get(reverse("podcast-subscribe-ui") + "?sort=pub_date&order=desc")
+        episodes = list(res_date_desc.context["pending_episodes"])
+        self.assertEqual([e.id for e in episodes], [ep_b.id, ep_a.id])
+
+        # Invalid sort key falls back to default
+        res_invalid = self.client.get(reverse("podcast-subscribe-ui") + "?sort=hacked_column&order=asc")
+        self.assertEqual(res_invalid.status_code, 200)
+        episodes = list(res_invalid.context["pending_episodes"])
+        self.assertEqual([e.id for e in episodes], [ep_a.id, ep_b.id])
+
+    def test_pending_episodes_template_rendering(self):
+        """
+        Verify template renders the table, sort headers, filter toolbar, and pagination.
+        """
+        base_time = timezone.now()
+        for i in range(14):
+            Episode.objects.create(
+                podcast=self.podcast,
+                title=f"Pending Ep {i+2:02d}",
+                guid=f"guid-render-{i+2}",
+                original_audio_url=f"http://example.com/ep{i+2}.mp3",
+                pub_date=base_time + timezone.timedelta(minutes=i + 1),
+                status=Episode.Status.DOWNLOADING,
+            )
+
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?q=Pending&sort=title&order=asc")
+        self.assertEqual(response.status_code, 200)
+        # Check toolbar presence
+        self.assertContains(response, 'name="q"')
+        self.assertContains(response, 'name="podcast_id"')
+        self.assertContains(response, 'name="status"')
+        self.assertContains(response, 'value="Pending"')
+        # Check sort links and indicators
+        self.assertContains(response, 'sort=title&amp;order=desc')
+        # Check pagination links include query params
+        self.assertContains(response, 'page=2')
+        self.assertContains(response, 'q=Pending')
+        self.assertContains(response, 'sort=title')
+        # Check status badge
+        self.assertContains(response, "Downloading")
+        # Check podcast link
+        self.assertContains(response, reverse("podcast-status-ui", args=[self.podcast.id]))
+
+    def test_pending_episodes_empty_filter_state(self):
+        """
+        Verify empty message displayed when filters yield no matches.
+        """
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?q=NonExistentEpisode123")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No pending episodes match the selected filter criteria.")
+        self.assertContains(response, "Reset Filters")
+
+    def test_pending_episodes_card_hidden_when_no_pending_and_no_filter(self):
+        """
+        Verify pending episodes card is hidden when there are 0 pending episodes.
+        """
+        Episode.objects.all().delete()
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "pending-episodes-panel")
 
 
 class PodcastStatusUIViewTest(PodcastTestCase):

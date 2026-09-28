@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 import feedparser
 from django.conf import settings
+from django.core.paginator import EmptyPage, PageNotAnInteger, Paginator
 from django.db import transaction
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -277,25 +278,120 @@ def create_podcast_from_url(rss_url: str, download_all: bool = False) -> Podcast
 
 class PodcastSubscribeUIView(View):
     """
-    A view to render the subscription form and handle its submission.
+    A view to render the subscription form and handle its submission,
+    displaying metrics and a paginated, filterable, sortable list of pending episodes.
     """
+
+    PENDING_STATUSES = [
+        Episode.Status.NEW,
+        Episode.Status.QUEUED,
+        Episode.Status.DOWNLOADING,
+        Episode.Status.ANALYZING,
+        Episode.Status.PROCESSING,
+    ]
+
+    SORT_FIELDS = {
+        "podcast": "podcast__title",
+        "title": "title",
+        "pub_date": "pub_date",
+        "status": "status",
+    }
+
+    PAGE_SIZE = 10
+
+    def _get_context(self, request, extra_context=None):
+        podcasts = Podcast.objects.all().order_by('title')
+        last_polled_time = Podcast.objects.exclude(last_polled=None).order_by('-last_polled').first()
+
+        pending_episodes_qs = Episode.objects.filter(
+            status__in=self.PENDING_STATUSES
+        ).select_related('podcast')
+
+        status_filter = request.GET.get("status", "").strip() if request.method == "GET" else ""
+        if status_filter in [s.value for s in self.PENDING_STATUSES]:
+            pending_episodes_qs = pending_episodes_qs.filter(status=status_filter)
+
+        podcast_id_filter = request.GET.get("podcast_id", "").strip() if request.method == "GET" else ""
+        if podcast_id_filter:
+            pending_episodes_qs = pending_episodes_qs.filter(podcast_id=podcast_id_filter)
+
+        search_query = request.GET.get("q", "").strip() if request.method == "GET" else ""
+        if search_query:
+            pending_episodes_qs = pending_episodes_qs.filter(title__icontains=search_query)
+
+        sort_by = request.GET.get("sort", "pub_date").strip() if request.method == "GET" else "pub_date"
+        if sort_by not in self.SORT_FIELDS:
+            sort_by = "pub_date"
+
+        order = request.GET.get("order", "asc").strip().lower() if request.method == "GET" else "asc"
+        if order not in ["asc", "desc"]:
+            order = "asc"
+
+        sort_field = self.SORT_FIELDS[sort_by]
+        if order == "desc":
+            sort_field = f"-{sort_field}"
+
+        pending_episodes_qs = pending_episodes_qs.order_by(sort_field)
+
+        paginator = Paginator(pending_episodes_qs, self.PAGE_SIZE)
+        page_number = request.GET.get("page") if request.method == "GET" else 1
+        try:
+            pending_page = paginator.page(page_number)
+        except PageNotAnInteger:
+            pending_page = paginator.page(1)
+        except EmptyPage:
+            pending_page = paginator.page(paginator.num_pages if paginator.num_pages > 0 else 1)
+
+        query_params = request.GET.copy() if request.method == "GET" else {}
+        if "page" in query_params:
+            del query_params["page"]
+        querystring = query_params.urlencode() if hasattr(query_params, "urlencode") else ""
+
+        sort_urls = {}
+        for col in self.SORT_FIELDS.keys():
+            col_order = "desc" if (sort_by == col and order == "asc") else "asc"
+            params = query_params.copy()
+            params["sort"] = col
+            params["order"] = col_order
+            sort_urls[col] = {
+                "url": f"?{params.urlencode()}" if hasattr(params, "urlencode") else f"?sort={col}&order={col_order}",
+                "is_active": sort_by == col,
+                "order": order if sort_by == col else None,
+                "direction": order if sort_by == col else None,
+            }
+
+        total_pending_count = Episode.objects.filter(status__in=self.PENDING_STATUSES).count()
+
+        context = {
+            'podcasts': podcasts,
+            'last_polled_time': last_polled_time.last_polled if last_polled_time else None,
+            'pending_episodes': pending_page,
+            'metrics': MetricsService.get_system_metrics(),
+            'pending_statuses': [
+                (Episode.Status.NEW, "New"),
+                (Episode.Status.QUEUED, "Queued"),
+                (Episode.Status.DOWNLOADING, "Downloading"),
+                (Episode.Status.ANALYZING, "Analyzing"),
+                (Episode.Status.PROCESSING, "Processing"),
+            ],
+            'selected_status': status_filter,
+            'selected_podcast': podcast_id_filter,
+            'search_query': search_query,
+            'sort_by': sort_by,
+            'sort_order': order,
+            'sort_urls': sort_urls,
+            'querystring': querystring,
+            'total_pending_count': total_pending_count,
+        }
+        if extra_context:
+            context.update(extra_context)
+        return context
 
     def get(self, request):
         """
         Handles GET requests and renders the subscription form.
         """
-        podcasts = Podcast.objects.all().order_by('title')
-        last_polled_time = Podcast.objects.exclude(last_polled=None).order_by('-last_polled').first()
-        pending_episodes = Episode.objects.filter(
-            status__in=[Episode.Status.NEW, Episode.Status.DOWNLOADING, Episode.Status.PROCESSING]
-        ).order_by('pub_date')
-
-        context = {
-            'podcasts': podcasts,
-            'last_polled_time': last_polled_time.last_polled if last_polled_time else None,
-            'pending_episodes': pending_episodes,
-            'metrics': MetricsService.get_system_metrics(),
-        }
+        context = self._get_context(request)
         return render(request, "podcasts/subscribe.html", context)
 
     def post(self, request):
@@ -305,16 +401,8 @@ class PodcastSubscribeUIView(View):
         rss_url = request.POST.get("rss_url")
         download_all = "download_all" in request.POST
         if not rss_url:
-            podcasts = Podcast.objects.all().order_by('title')
-            return render(
-                request,
-                "podcasts/subscribe.html",
-                {
-                    "error": "RSS URL is required.",
-                    "podcasts": podcasts,
-                    "metrics": MetricsService.get_system_metrics(),
-                },
-            )
+            context = self._get_context(request, {"error": "RSS URL is required."})
+            return render(request, "podcasts/subscribe.html", context)
 
         try:
             podcast = create_podcast_from_url(rss_url, download_all=download_all)
@@ -322,17 +410,14 @@ class PodcastSubscribeUIView(View):
                 reverse("podcast-status-ui", kwargs={"podcast_id": podcast.id})
             )
         except (ValueError, IOError) as e:
-            podcasts = Podcast.objects.all().order_by('title')
-            return render(
+            context = self._get_context(
                 request,
-                "podcasts/subscribe.html",
                 {
                     "error": str(e),
                     "rss_url": rss_url,
-                    "podcasts": podcasts,
-                    "metrics": MetricsService.get_system_metrics(),
                 },
             )
+            return render(request, "podcasts/subscribe.html", context)
 
 
 class PodcastStatusUIView(View):
