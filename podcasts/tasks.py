@@ -1071,6 +1071,31 @@ class EpisodeProcessor:
             )
 
 
+def parse_duration_to_seconds(raw_duration: Any) -> Optional[int]:
+    """Parses a duration value (int, float, or HH:MM:SS string) into integer seconds."""
+    if raw_duration is None:
+        return None
+    if isinstance(raw_duration, (int, float)):
+        return int(round(raw_duration))
+    if isinstance(raw_duration, str):
+        raw_str = raw_duration.strip()
+        if not raw_str:
+            return None
+        try:
+            if ":" in raw_str:
+                parts = raw_str.split(":")
+                if len(parts) == 3:
+                    return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(round(float(parts[2])))
+                if len(parts) == 2:
+                    return int(parts[0]) * 60 + int(round(float(parts[1])))
+                if len(parts) == 1:
+                    return int(round(float(parts[0])))
+            return int(round(float(raw_str)))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 class FeedManager:
     """Manages the polling of a podcast feed and the processing of its episodes."""
 
@@ -1157,15 +1182,15 @@ class FeedManager:
             )
             return None
 
-        audio_url = next(
+        audio_enclosure = next(
             (
-                enclosure.get("href")
+                enclosure
                 for enclosure in entry.get("enclosures", [])
                 if enclosure.get("type", "").startswith("audio")
             ),
             None,
         )
-        if not audio_url:
+        if not audio_enclosure or not audio_enclosure.get("href"):
             logger.warning(
                 "Skipping entry '%s' (GUID: %s) in '%s' due to missing audio enclosure.",
                 entry.get("title", "N/A"),
@@ -1173,6 +1198,21 @@ class FeedManager:
                 self.podcast.title,
             )
             return None
+
+        audio_url = audio_enclosure.get("href")
+
+        audio_length = 0
+        raw_length = audio_enclosure.get("length")
+        if raw_length:
+            try:
+                parsed_len = int(raw_length)
+                if parsed_len > 0:
+                    audio_length = parsed_len
+            except (ValueError, TypeError):
+                pass
+
+        raw_duration = entry.get("itunes_duration") or entry.get("duration")
+        duration_seconds = parse_duration_to_seconds(raw_duration)
 
         pub_date_parsed = entry.get("published_parsed")
         if not pub_date_parsed:
@@ -1197,8 +1237,20 @@ class FeedManager:
                     "title": entry.get("title", "Untitled Episode"),
                     "pub_date": pub_date,
                     "original_audio_url": audio_url,
+                    "rehosted_audio_size": audio_length,
+                    "duration_seconds": duration_seconds,
                 },
             )
+            if not created:
+                updated_fields = []
+                if episode.rehosted_audio_size == 0 and audio_length > 0:
+                    episode.rehosted_audio_size = audio_length
+                    updated_fields.append("rehosted_audio_size")
+                if episode.duration_seconds is None and duration_seconds is not None:
+                    episode.duration_seconds = duration_seconds
+                    updated_fields.append("duration_seconds")
+                if updated_fields:
+                    episode.save(update_fields=updated_fields)
             return episode, created
         except (ValueError, IOError) as _:
             logger.error(

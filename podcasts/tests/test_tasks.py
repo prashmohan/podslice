@@ -532,6 +532,51 @@ class AdditionalTasksTest(PodcastTestCase):
         # Should log an error but not raise any exception
         reprocess_podcast(uuid.uuid4())
 
+    def test_create_or_update_episode_extracts_length_and_duration(self):
+        """
+        Test that _create_or_update_episode_from_entry extracts enclosure length
+        and duration from the feed entry and sets them on the new Episode.
+        """
+        entry = {
+            "id": "guid-enclosure-test-1",
+            "title": "Enclosure Metadata Test",
+            "enclosures": [{"href": "http://example.com/audio.mp3", "type": "audio/mpeg", "length": "93491347"}],
+            "itunes_duration": "01:37:23",
+            "published_parsed": timezone.now().timetuple(),
+        }
+        result = self.feed_manager._create_or_update_episode_from_entry(entry)  # pylint: disable=protected-access
+        self.assertIsNotNone(result)
+        episode, created = result
+        self.assertTrue(created)
+        self.assertEqual(episode.rehosted_audio_size, 93491347)
+        self.assertEqual(episode.duration_seconds, 5843)
+
+        # Calling again with existing episode and updated length should backfill if size was 0
+        episode.rehosted_audio_size = 0
+        episode.duration_seconds = None
+        episode.save()
+        result2 = self.feed_manager._create_or_update_episode_from_entry(entry)  # pylint: disable=protected-access
+        self.assertIsNotNone(result2)
+        ep2, created2 = result2
+        self.assertFalse(created2)
+        ep2.refresh_from_db()
+        self.assertEqual(ep2.rehosted_audio_size, 93491347)
+        self.assertEqual(ep2.duration_seconds, 5843)
+
+    def test_parse_duration_to_seconds(self):
+        """
+        Test that parse_duration_to_seconds accurately handles various formats.
+        """
+        from podcasts.tasks import parse_duration_to_seconds
+        self.assertEqual(parse_duration_to_seconds("01:37:23"), 5843)
+        self.assertEqual(parse_duration_to_seconds("45:12"), 2712)
+        self.assertEqual(parse_duration_to_seconds("120"), 120)
+        self.assertEqual(parse_duration_to_seconds(3600), 3600)
+        self.assertEqual(parse_duration_to_seconds(18.7), 19)
+        self.assertIsNone(parse_duration_to_seconds(None))
+        self.assertIsNone(parse_duration_to_seconds(""))
+        self.assertIsNone(parse_duration_to_seconds("invalid-time"))
+
     def test_get_episodes_to_process_stuck_threshold(self):
         """
         Test that _get_episodes_to_process resets failed and stuck episodes correctly.

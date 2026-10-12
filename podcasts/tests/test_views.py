@@ -261,6 +261,65 @@ class PodcastViewsTest(TestCase):
         episode.refresh_from_db()
         self.assertEqual(episode.status, Episode.Status.NEW)
 
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_serve_rehosted_media_crawler_get_does_not_trigger_processing(self, mock_thread_class):
+        """
+        Verify that a GET request from a bot or crawler (e.g. WordPress.com - Audio/1.0
+        or PocketCasts Feed Parser) on a NEW episode does NOT trigger background
+        rehosting or change episode status, but returns HTTP 200 with audio headers.
+        """
+        episode = self.podcast.episodes.create(
+            title="Crawler Probe Episode",
+            guid="crawler-probe-1",
+            original_audio_url="http://example.com/crawler-probe.mp3",
+            status=Episode.Status.NEW,
+            pub_date=timezone.now(),
+            rehosted_audio_size=93491347,
+        )
+        url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
+
+        # Test WordPress.com - Audio/1.0 crawler
+        response = self.client.get(url, HTTP_USER_AGENT="WordPress.com - Audio/1.0")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Content-Type"), "audio/mpeg")
+        self.assertEqual(response.headers.get("Accept-Ranges"), "bytes")
+        self.assertEqual(response.headers.get("Content-Length"), "93491347")
+        mock_thread_class.assert_not_called()
+
+        # Test Pocket Casts feed parser
+        response_pc = self.client.get(
+            url,
+            HTTP_USER_AGENT="PocketCasts/1.0 (Pocket Casts Feed Parser; +http://pocketcasts.com/)"
+        )
+        self.assertEqual(response_pc.status_code, 200)
+        self.assertEqual(response_pc.headers.get("Content-Length"), "93491347")
+        mock_thread_class.assert_not_called()
+
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.NEW)
+
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_serve_rehosted_media_legitimate_player_triggers_processing(self, mock_thread_class):
+        """
+        Verify that a GET request from a real podcast player (e.g. Pocket Casts app)
+        on a NEW episode DOES trigger background rehosting and returns HTTP 202.
+        """
+        episode = self.podcast.episodes.create(
+            title="Mobile Player Episode",
+            guid="mobile-player-1",
+            original_audio_url="http://example.com/mobile-player.mp3",
+            status=Episode.Status.NEW,
+            pub_date=timezone.now(),
+            rehosted_audio_size=93491347,
+        )
+        url = reverse("serve_media_episode", kwargs={"media_guid": episode.rehosted_media_id})
+        response = self.client.get(url, HTTP_USER_AGENT="Pocket Casts")
+
+        self.assertEqual(response.status_code, 202)
+        mock_thread_class.assert_called_once()
+        episode.refresh_from_db()
+        self.assertEqual(episode.status, Episode.Status.DOWNLOADING)
+
     def test_serve_rehosted_media_complete_status(self):
         """
         Test that accessing a COMPLETE status episode serves it directly without reprocessing.

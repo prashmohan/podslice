@@ -694,13 +694,39 @@ media_locks = {}
 media_locks_lock = threading.Lock()
 
 def get_media_lock(media_guid):
+    """Returns a thread lock for the given media GUID to serialize concurrent access."""
     with media_locks_lock:
         if media_guid not in media_locks:
             media_locks[media_guid] = threading.Lock()
         return media_locks[media_guid]
 
 
-def serve_rehosted_media(request, media_guid):
+BOT_USER_AGENT_PATTERNS = [
+    "wordpress.com - audio",
+    "wordpress.com",
+    "pocket casts feed parser",
+    "pocketcasts/",
+    "feed parser",
+    "bot",
+    "crawler",
+    "spider",
+    "feedfetcher",
+    "facebookexternalhit",
+    "slackbot",
+    "bytespider",
+    "archiver",
+]
+
+
+def is_bot_or_crawler(user_agent: str) -> bool:
+    """Returns True if the User-Agent header indicates a bot, feed parser, or crawler."""
+    if not user_agent:
+        return False
+    ua_lower = user_agent.lower()
+    return any(pattern in ua_lower for pattern in BOT_USER_AGENT_PATTERNS)
+
+
+def serve_rehosted_media(request, media_guid):  # pylint: disable=too-many-return-statements
     """
     Serves a re-hosted audio file.
 
@@ -759,9 +785,10 @@ def serve_rehosted_media(request, media_guid):
                 pass
             raise Http404("Media is complete but file not found on disk.")
 
-        # Ignore HEAD requests for un-processed or in-progress episodes to prevent
-        # podcast aggregators/players probing enclosure sizes from triggering expensive processing
-        if request.method == "HEAD":
+        # Ignore HEAD requests and requests from bots/crawlers for un-processed or in-progress episodes
+        # to prevent podcast aggregators/crawlers probing enclosure sizes from triggering expensive processing
+        user_agent = request.META.get("HTTP_USER_AGENT", "")
+        if request.method == "HEAD" or is_bot_or_crawler(user_agent):
             response = HttpResponse(status=200, content_type="audio/mpeg")
             response["Accept-Ranges"] = "bytes"
             if episode.rehosted_audio_size:
