@@ -8,7 +8,7 @@ djangorestframework==3.18.3
 feedparser==6.0.14
 
 requests==2.34.2
-google-generativeai==0.8.6
+google-genai==2.30.0
 pylint-django==2.8.0
 gunicorn==23.0.0
 python-dotenv==1.2.4
