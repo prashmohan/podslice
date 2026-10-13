@@ -16,8 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import feedparser
-import google.generativeai as genai
-from google.genai import errors as genai_errors, types as genai_types
+from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, Field
 import requests
@@ -97,7 +96,7 @@ class AdManager:
     @staticmethod
     def _is_rate_limit_error(exc: Exception) -> bool:
         """Determines if an exception corresponds to an HTTP 429 rate limit or quota exhaustion."""
-        if isinstance(exc, genai_errors.APIError):
+        if isinstance(exc, errors.APIError):
             if (
                 exc.code == 429
                 or str(exc.code) == "429"
@@ -238,6 +237,24 @@ class AdManager:
 
         return 10.0
 
+    @staticmethod
+    def _cleanup_remote_files(
+        uploaded_files: Dict[str, Any], clients: Dict[str, Any]
+    ) -> None:
+        """Cleans up uploaded remote files from Gemini File API."""
+        for key, uploaded_file in uploaded_files.items():
+            client = clients.get(key)
+            if not client:
+                continue
+            file_name = getattr(uploaded_file, "name", None) or str(uploaded_file)
+            try:
+                client.files.delete(name=file_name)
+                logger.info("Deleted remote audio file: %s", file_name)
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete remote audio file %s: %s", file_name, str(e)
+                )
+
     def _get_ad_segments_from_gemini(
         self, audio_path: str, audio_duration_seconds: float
     ) -> str:
@@ -289,22 +306,33 @@ class AdManager:
             audio_duration_seconds=audio_duration_seconds,
         )
 
+        clients: Dict[str, Any] = {}
         uploaded_files: Dict[str, Any] = {}
 
         def _mask_key(key: str) -> str:
             return key[:6] + "..." if len(key) > 6 else key
 
+        def _cleanup_remote_files() -> None:
+            self._cleanup_remote_files(uploaded_files, clients)
+
         def _call_model_with_key(model_name: str, api_key: str) -> str:
             masked = _mask_key(api_key)
             try:
-                genai.configure(api_key=api_key)
+                if api_key not in clients:
+                    clients[api_key] = genai.Client(api_key=api_key)
+                client = clients[api_key]
+
                 if api_key not in uploaded_files:
-                    uploaded_files[api_key] = genai.upload_file(path=audio_path)
-                model = genai.GenerativeModel(
-                    model_name,
-                    generation_config={"response_mime_type": "application/json"},
+                    uploaded_files[api_key] = client.files.upload(file=audio_path)
+
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[prompt, uploaded_files[api_key]],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_schema=list[AdSegmentSchema],
+                    ),
                 )
-                response = model.generate_content([prompt, uploaded_files[api_key]])
                 gemini_telemetry["attempts"].append({
                     "model": model_name,
                     "key_masked": masked,
@@ -329,43 +357,12 @@ class AdManager:
         retry_delays: List[float] = []
         had_429 = False
 
-        # Phase 1: Try Primary Model across all keys
-        for api_key in api_keys:
-            try:
-                logger.info(
-                    "Attempting ad detection with primary model: %s",
-                    primary_model,
-                )
-                res = _call_model_with_key(primary_model, api_key)
-                if had_429:
-                    gemini_telemetry["retry_recovered"] = True
-                return res
-            except Exception as e:
-                logger.warning(
-                    "Gemini API call failed for model %s with key %s: %s",
-                    primary_model,
-                    _mask_key(api_key),
-                    str(e),
-                )
-                if self._is_rate_limit_error(e):
-                    had_429 = True
-                    retry_delays.append(self._extract_retry_delay(e))
-
-        # Phase 2: If all keys failed on primary model and at least one was 429, retry primary once
-        if retry_delays:
-            gemini_telemetry["retry_attempts"] += 1
-            sleep_sec = min(min(retry_delays), max_retry_delay)
-            sleep_sec = max(0.0, float(sleep_sec))
-            logger.info(
-                "All keys rate limited on primary model %s. Sleeping %.1fs before retry.",
-                primary_model,
-                sleep_sec,
-            )
-            time.sleep(sleep_sec)
+        try:
+            # Phase 1: Try Primary Model across all keys
             for api_key in api_keys:
                 try:
                     logger.info(
-                        "Retrying ad detection with primary model: %s",
+                        "Attempting ad detection with primary model: %s",
                         primary_model,
                     )
                     res = _call_model_with_key(primary_model, api_key)
@@ -374,42 +371,76 @@ class AdManager:
                     return res
                 except Exception as e:
                     logger.warning(
-                        "Gemini API retry failed for model %s with key %s: %s",
+                        "Gemini API call failed for model %s with key %s: %s",
                         primary_model,
                         _mask_key(api_key),
                         str(e),
                     )
                     if self._is_rate_limit_error(e):
                         had_429 = True
+                        retry_delays.append(self._extract_retry_delay(e))
 
-        # Phase 3: Fallback model across all keys
-        logger.info(
-            "Attempting ad detection with fallback model: %s", fallback_model
-        )
-        gemini_telemetry["fallback_used"] = True
-        for api_key in api_keys:
-            try:
+            # Phase 2: If all keys failed on primary model and at least one was 429, retry primary once
+            if retry_delays:
+                gemini_telemetry["retry_attempts"] += 1
+                sleep_sec = min(min(retry_delays), max_retry_delay)
+                sleep_sec = max(0.0, float(sleep_sec))
                 logger.info(
-                    "Attempting ad detection with model: %s", fallback_model
+                    "All keys rate limited on primary model %s. Sleeping %.1fs before retry.",
+                    primary_model,
+                    sleep_sec,
                 )
-                res = _call_model_with_key(fallback_model, api_key)
-                if had_429:
-                    gemini_telemetry["retry_recovered"] = True
-                return res
-            except Exception as e:
-                logger.warning(
-                    "Gemini API call failed for model %s with key %s: %s",
-                    fallback_model,
-                    _mask_key(api_key),
-                    str(e),
-                )
-                if self._is_rate_limit_error(e):
-                    had_429 = True
+                time.sleep(sleep_sec)
+                for api_key in api_keys:
+                    try:
+                        logger.info(
+                            "Retrying ad detection with primary model: %s",
+                            primary_model,
+                        )
+                        res = _call_model_with_key(primary_model, api_key)
+                        if had_429:
+                            gemini_telemetry["retry_recovered"] = True
+                        return res
+                    except Exception as e:
+                        logger.warning(
+                            "Gemini API retry failed for model %s with key %s: %s",
+                            primary_model,
+                            _mask_key(api_key),
+                            str(e),
+                        )
+                        if self._is_rate_limit_error(e):
+                            had_429 = True
 
-        # Phase 4: All models and keys failed
-        logger.error("All Gemini models and API keys failed.")
-        gemini_telemetry["error"] = "All Gemini models and API keys failed."
-        return "[]"
+            # Phase 3: Fallback model across all keys
+            logger.info(
+                "Attempting ad detection with fallback model: %s", fallback_model
+            )
+            gemini_telemetry["fallback_used"] = True
+            for api_key in api_keys:
+                try:
+                    logger.info(
+                        "Attempting ad detection with model: %s", fallback_model
+                    )
+                    res = _call_model_with_key(fallback_model, api_key)
+                    if had_429:
+                        gemini_telemetry["retry_recovered"] = True
+                    return res
+                except Exception as e:
+                    logger.warning(
+                        "Gemini API call failed for model %s with key %s: %s",
+                        fallback_model,
+                        _mask_key(api_key),
+                        str(e),
+                    )
+                    if self._is_rate_limit_error(e):
+                        had_429 = True
+
+            # Phase 4: All models and keys failed
+            logger.error("All Gemini models and API keys failed.")
+            gemini_telemetry["error"] = "All Gemini models and API keys failed."
+            return "[]"
+        finally:
+            _cleanup_remote_files()
 
     @staticmethod
     def _normalize_timestamp(val: Any) -> Optional[float]:

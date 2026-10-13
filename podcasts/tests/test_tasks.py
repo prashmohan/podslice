@@ -634,7 +634,7 @@ class AdditionalTasksTest(PodcastTestCase):
 
 
 @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, "test_media"))
-class EpisodeProcessorTestCase(PodcastTestCase):
+class EpisodeProcessorTest(PodcastTestCase):
     """
     Test cases for pipeline telemetry instrumentation and metrics recording.
     """
@@ -643,6 +643,48 @@ class EpisodeProcessorTestCase(PodcastTestCase):
         super().setUp()
         self.processor = EpisodeProcessor(self.episode)
         self.ad_manager = AdManager(self.episode)
+
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_remote_file_cleanup_after_analysis(self, mock_client_cls):
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "files/test-remote-audio-123"
+        mock_client.files.upload.return_value = fake_file
+        mock_client.models.generate_content.return_value = mock.Mock(
+            text='[{"start": 0, "end": 10, "label": "intro"}]'
+        )
+
+        with mock.patch("podcasts.tasks.settings") as mock_settings:
+            mock_settings.GEMINI_API_KEYS = ["key-cleanup"]
+            mock_settings.GEMINI_MODEL = "gemini-3.8-flash"
+            mock_settings.FALLBACK_GEMINI_MODEL = "gemini-3.5-flash-lite"
+            res = self.ad_manager._get_ad_segments_from_gemini("dummy.mp3", 30.0)
+
+        self.assertEqual(res, '[{"start": 0, "end": 10, "label": "intro"}]')
+        mock_client.files.delete.assert_called_once_with(
+            name="files/test-remote-audio-123"
+        )
+
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_remote_file_cleanup_on_error(self, mock_client_cls):
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "files/test-remote-audio-err"
+        mock_client.files.upload.return_value = fake_file
+        mock_client.models.generate_content.side_effect = Exception("Model exploded")
+
+        with mock.patch("podcasts.tasks.settings") as mock_settings:
+            mock_settings.GEMINI_API_KEYS = ["key-cleanup-err"]
+            mock_settings.GEMINI_MODEL = "gemini-3.8-flash"
+            mock_settings.FALLBACK_GEMINI_MODEL = "gemini-3.5-flash-lite"
+            res = self.ad_manager._get_ad_segments_from_gemini("dummy.mp3", 30.0)
+
+        self.assertEqual(res, "[]")
+        mock_client.files.delete.assert_called_once_with(
+            name="files/test-remote-audio-err"
+        )
 
     @mock.patch("podcasts.tasks.EpisodeProcessor._slice_and_save_audio")
     @mock.patch("podcasts.tasks.AdManager.analyze_audio", return_value=[{"start": 10.0, "end": 20.0}])
