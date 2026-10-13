@@ -77,7 +77,7 @@ Example Output:
 """
 
 
-class AdSegmentSchema(BaseModel):
+class AdSegmentSchema(BaseModel):  # pylint: disable=too-few-public-methods
     """Pydantic schema for structured Gemini ad segment output."""
 
     start: float = Field(..., description="Start timestamp of the segment in seconds.")
@@ -103,7 +103,6 @@ class AdManager:
                 or getattr(exc, "status", None) == "RESOURCE_EXHAUSTED"
             ):
                 return True
-            return False
 
         code = (
             getattr(exc, "code", None)
@@ -244,9 +243,13 @@ class AdManager:
         """Cleans up uploaded remote files from Gemini File API."""
         for key, uploaded_file in uploaded_files.items():
             client = clients.get(key)
-            if not client:
+            if not client or not uploaded_file:
                 continue
-            file_name = getattr(uploaded_file, "name", None) or str(uploaded_file)
+            file_name = getattr(uploaded_file, "name", None) or (
+                uploaded_file if isinstance(uploaded_file, str) else None
+            )
+            if not file_name:
+                continue
             try:
                 client.files.delete(name=file_name)
                 logger.info("Deleted remote audio file: %s", file_name)
