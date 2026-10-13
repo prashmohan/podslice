@@ -28,21 +28,21 @@ class GeminiFallbackTest(TestCase):
         self.ad_manager = AdManager(self.episode)
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_single_key_success_primary_model(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify normal operation with a single API key succeeding on the primary model.
         """
-        mock_model = mock.Mock()
-        mock_model.generate_content.return_value = mock.Mock(
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "fake_file_handle"
+        mock_client.files.upload.return_value = fake_file
+        mock_client.models.generate_content.return_value = mock.Mock(
             text='[{"start": 10, "end": 20}]'
         )
-        mock_gen_model.return_value = mock_model
-        mock_upload.return_value = "fake_file_handle"
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-alpha"]
@@ -52,32 +52,41 @@ class GeminiFallbackTest(TestCase):
             result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3", 60.0)
 
             self.assertEqual(result, '[{"start": 10, "end": 20}]')
-            mock_configure.assert_called_once_with(api_key="key-alpha")
-            mock_upload.assert_called_once_with(path="fake_path.mp3")
-            mock_gen_model.assert_called_once_with(
-                "primary-model",
-                generation_config={"response_mime_type": "application/json"},
-            )
+            mock_client_cls.assert_called_once_with(api_key="key-alpha")
+            mock_client.files.upload.assert_called_once_with(file="fake_path.mp3")
+            mock_client.models.generate_content.assert_called_once()
+            call_kwargs = mock_client.models.generate_content.call_args.kwargs
+            self.assertEqual(call_kwargs["model"], "primary-model")
+            self.assertEqual(call_kwargs["config"].response_mime_type, "application/json")
+            mock_client.files.delete.assert_called_once_with(name="fake_file_handle")
             mock_sleep.assert_not_called()
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_key1_fails_429_key2_succeeds_primary_model(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify that if Key 1 hits 429, Key 2 is tried immediately on the primary model without sleeping.
         """
-        model_key1 = mock.Mock()
-        model_key1.generate_content.side_effect = Exception("429 ResourceExhausted: quota exceeded")
+        client_k1 = mock.Mock()
+        file_k1 = mock.Mock()
+        file_k1.name = "file_k1"
+        client_k1.files.upload.return_value = file_k1
+        client_k1.models.generate_content.side_effect = Exception("429 ResourceExhausted: quota exceeded")
 
-        model_key2 = mock.Mock()
-        model_key2.generate_content.return_value = mock.Mock(text='[{"start": 30, "end": 45}]')
+        client_k2 = mock.Mock()
+        file_k2 = mock.Mock()
+        file_k2.name = "file_k2"
+        client_k2.files.upload.return_value = file_k2
+        client_k2.models.generate_content.return_value = mock.Mock(text='[{"start": 30, "end": 45}]')
 
-        mock_gen_model.side_effect = [model_key1, model_key2]
-        mock_upload.side_effect = ["file_k1", "file_k2"]
+        def client_side_effect(api_key):
+            if api_key == "key-1":
+                return client_k1
+            return client_k2
+
+        mock_client_cls.side_effect = client_side_effect
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1", "key-2"]
@@ -87,26 +96,26 @@ class GeminiFallbackTest(TestCase):
             result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3", 60.0)
 
             self.assertEqual(result, '[{"start": 30, "end": 45}]')
-            self.assertEqual(mock_configure.call_count, 2)
-            mock_configure.assert_has_calls([
+            self.assertEqual(mock_client_cls.call_count, 2)
+            mock_client_cls.assert_has_calls([
                 mock.call(api_key="key-1"),
                 mock.call(api_key="key-2"),
             ])
             # Sleep should NOT be called on fast key rotation
             mock_sleep.assert_not_called()
             # Primary model used for both attempts
-            self.assertEqual(mock_gen_model.call_count, 2)
-            mock_gen_model.assert_has_calls([
-                mock.call("primary-model", generation_config={"response_mime_type": "application/json"}),
-                mock.call("primary-model", generation_config={"response_mime_type": "application/json"}),
-            ])
+            self.assertEqual(client_k1.models.generate_content.call_count, 1)
+            self.assertEqual(client_k2.models.generate_content.call_count, 1)
+            self.assertEqual(client_k1.models.generate_content.call_args.kwargs["model"], "primary-model")
+            self.assertEqual(client_k2.models.generate_content.call_args.kwargs["model"], "primary-model")
+            # Files cleaned up
+            client_k1.files.delete.assert_called_once_with(name="file_k1")
+            client_k2.files.delete.assert_called_once_with(name="file_k2")
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_per_key_upload_isolation_and_caching(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify genai.upload_file is called once per distinct API key, and cached file handle is reused.
@@ -114,15 +123,24 @@ class GeminiFallbackTest(TestCase):
         # Scenario:
         # Pass 1: Key 1 fails (429), Key 2 fails (429) -> uploaded once for each
         # Pass 2 (Retry): Key 1 succeeds -> should reuse Key 1 file handle, no new upload
-        model_p1_k1 = mock.Mock()
-        model_p1_k1.generate_content.side_effect = Exception("429 ResourceExhausted: retry in 5s")
-        model_p1_k2 = mock.Mock()
-        model_p1_k2.generate_content.side_effect = Exception("429 ResourceExhausted: retry in 5s")
-        model_p2_k1 = mock.Mock()
-        model_p2_k1.generate_content.return_value = mock.Mock(text='[{"start": 5, "end": 15}]')
+        client_k1 = mock.Mock()
+        file_k1 = mock.Mock()
+        file_k1.name = "file_handle_key1"
+        client_k1.files.upload.return_value = file_k1
+        client_k1.models.generate_content.side_effect = [
+            Exception("429 ResourceExhausted: retry in 5s"),
+            mock.Mock(text='[{"start": 5, "end": 15}]'),
+        ]
 
-        mock_gen_model.side_effect = [model_p1_k1, model_p1_k2, model_p2_k1]
-        mock_upload.side_effect = ["file_handle_key1", "file_handle_key2"]
+        client_k2 = mock.Mock()
+        file_k2 = mock.Mock()
+        file_k2.name = "file_handle_key2"
+        client_k2.files.upload.return_value = file_k2
+        client_k2.models.generate_content.side_effect = [
+            Exception("429 ResourceExhausted: retry in 5s"),
+        ]
+
+        mock_client_cls.side_effect = lambda api_key: client_k1 if api_key == "key-1" else client_k2
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1", "key-2"]
@@ -133,36 +151,46 @@ class GeminiFallbackTest(TestCase):
             result = self.ad_manager._get_ad_segments_from_gemini("audio.mp3", 100.0)
 
             self.assertEqual(result, '[{"start": 5, "end": 15}]')
-            # upload_file should be called exactly twice: once for key-1, once for key-2
-            self.assertEqual(mock_upload.call_count, 2)
-            mock_upload.assert_has_calls([
-                mock.call(path="audio.mp3"),
-                mock.call(path="audio.mp3"),
-            ])
-            # Key 1 retry must have used the cached file_handle_key1
-            generate_content_args = model_p2_k1.generate_content.call_args[0][0]
-            self.assertIn("file_handle_key1", generate_content_args)
+            # upload should be called exactly once for each client
+            self.assertEqual(client_k1.files.upload.call_count, 1)
+            self.assertEqual(client_k2.files.upload.call_count, 1)
+            client_k1.files.upload.assert_called_once_with(file="audio.mp3")
+            client_k2.files.upload.assert_called_once_with(file="audio.mp3")
+            # Client creation should be once per key
+            self.assertEqual(mock_client_cls.call_count, 2)
+            # Key 1 retry must have used the cached file_k1
+            retry_contents = client_k1.models.generate_content.call_args_list[1].kwargs["contents"]
+            self.assertIn(file_k1, retry_contents)
+            # Cleanup should delete files for both keys
+            client_k1.files.delete.assert_called_once_with(name="file_handle_key1")
+            client_k2.files.delete.assert_called_once_with(name="file_handle_key2")
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_all_keys_fail_429_sleeps_and_retries_primary(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify that when all keys fail with 429, sleep(min(delays)) is executed and primary is retried.
         """
-        model_k1_try1 = mock.Mock()
-        model_k1_try1.generate_content.side_effect = Exception("ResourceExhausted: retry in 15s")
-        model_k2_try1 = mock.Mock()
-        model_k2_try1.generate_content.side_effect = Exception("429 rate limit exceeded. seconds: 6")
+        client_k1 = mock.Mock()
+        file_1 = mock.Mock()
+        file_1.name = "file_1"
+        client_k1.files.upload.return_value = file_1
+        client_k1.models.generate_content.side_effect = [
+            Exception("ResourceExhausted: retry in 15s"),
+            mock.Mock(text='[{"start": 0, "end": 10}]'),
+        ]
 
-        model_k1_retry = mock.Mock()
-        model_k1_retry.generate_content.return_value = mock.Mock(text='[{"start": 0, "end": 10}]')
+        client_k2 = mock.Mock()
+        file_2 = mock.Mock()
+        file_2.name = "file_2"
+        client_k2.files.upload.return_value = file_2
+        client_k2.models.generate_content.side_effect = [
+            Exception("429 rate limit exceeded. seconds: 6"),
+        ]
 
-        mock_gen_model.side_effect = [model_k1_try1, model_k2_try1, model_k1_retry]
-        mock_upload.side_effect = ["file_1", "file_2"]
+        mock_client_cls.side_effect = lambda api_key: client_k1 if api_key == "key-1" else client_k2
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1", "key-2"]
@@ -175,13 +203,13 @@ class GeminiFallbackTest(TestCase):
             self.assertEqual(result, '[{"start": 0, "end": 10}]')
             # min(15, 6) = 6.0
             mock_sleep.assert_called_once_with(6.0)
+            client_k1.files.delete.assert_called_once_with(name="file_1")
+            client_k2.files.delete.assert_called_once_with(name="file_2")
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_primary_fails_after_retry_falls_back_to_fallback_model(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify that if primary fails across all keys (even after retry), fallback model is tried.
@@ -190,15 +218,17 @@ class GeminiFallbackTest(TestCase):
         # 1. Primary try 1 -> 429
         # 2. Primary retry -> 429
         # 3. Fallback try 1 -> success
-        m_primary_1 = mock.Mock()
-        m_primary_1.generate_content.side_effect = Exception("429 ResourceExhausted")
-        m_primary_retry = mock.Mock()
-        m_primary_retry.generate_content.side_effect = Exception("429 ResourceExhausted")
-        m_fallback = mock.Mock()
-        m_fallback.generate_content.return_value = mock.Mock(text='[{"start": 12, "end": 24}]')
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "file_handle"
+        mock_client.files.upload.return_value = fake_file
 
-        mock_gen_model.side_effect = [m_primary_1, m_primary_retry, m_fallback]
-        mock_upload.return_value = "file_handle"
+        mock_client.models.generate_content.side_effect = [
+            Exception("429 ResourceExhausted"),
+            Exception("429 ResourceExhausted"),
+            mock.Mock(text='[{"start": 12, "end": 24}]'),
+        ]
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1"]
@@ -210,28 +240,29 @@ class GeminiFallbackTest(TestCase):
 
             self.assertEqual(result, '[{"start": 12, "end": 24}]')
             mock_sleep.assert_called_once_with(10.0)  # default delay when not specified in 429 msg
-            self.assertEqual(mock_gen_model.call_count, 3)
+            self.assertEqual(mock_client.models.generate_content.call_count, 3)
             # Verify third call was with fallback-model
-            mock_gen_model.assert_has_calls([
-                mock.call("primary-model", generation_config={"response_mime_type": "application/json"}),
-                mock.call("primary-model", generation_config={"response_mime_type": "application/json"}),
-                mock.call("fallback-model", generation_config={"response_mime_type": "application/json"}),
-            ])
+            models_called = [
+                call.kwargs["model"]
+                for call in mock_client.models.generate_content.call_args_list
+            ]
+            self.assertEqual(models_called, ["primary-model", "primary-model", "fallback-model"])
+            mock_client.files.delete.assert_called_once_with(name="file_handle")
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_all_keys_and_models_fail_returns_empty_list(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify that if primary (pass 1 + retry) and fallback fail on all keys, '[]' is returned.
         """
-        fail_model = mock.Mock()
-        fail_model.generate_content.side_effect = Exception("500 Internal Server Error")
-        mock_gen_model.return_value = fail_model
-        mock_upload.return_value = "fake_file"
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "fake_file"
+        mock_client.files.upload.return_value = fake_file
+        mock_client.models.generate_content.side_effect = Exception("500 Internal Server Error")
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1"]
@@ -242,24 +273,26 @@ class GeminiFallbackTest(TestCase):
 
             self.assertEqual(result, "[]")
             mock_sleep.assert_not_called()  # No 429 encountered, no sleep
+            mock_client.files.delete.assert_called_once_with(name="fake_file")
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_retry_delay_capped_at_max(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify retry delay is capped at GEMINI_MAX_RETRY_DELAY_SEC.
         """
-        m_primary_1 = mock.Mock()
-        m_primary_1.generate_content.side_effect = Exception("429 ResourceExhausted: retry in 60s")
-        m_primary_retry = mock.Mock()
-        m_primary_retry.generate_content.return_value = mock.Mock(text='[{"start": 1, "end": 2}]')
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "file_handle"
+        mock_client.files.upload.return_value = fake_file
 
-        mock_gen_model.side_effect = [m_primary_1, m_primary_retry]
-        mock_upload.return_value = "file_handle"
+        mock_client.models.generate_content.side_effect = [
+            Exception("429 ResourceExhausted: retry in 60s"),
+            mock.Mock(text='[{"start": 1, "end": 2}]'),
+        ]
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1"]
@@ -271,12 +304,11 @@ class GeminiFallbackTest(TestCase):
 
             self.assertEqual(result, '[{"start": 1, "end": 2}]')
             mock_sleep.assert_called_once_with(25.0)
+            mock_client.files.delete.assert_called_once_with(name="file_handle")
 
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_no_api_keys_configured(
-        self, mock_configure, mock_gen_model, mock_upload
+        self, mock_client_cls
     ):
         """
         Verify that if no API keys are configured, '[]' is returned immediately.
@@ -288,24 +320,23 @@ class GeminiFallbackTest(TestCase):
             result = self.ad_manager._get_ad_segments_from_gemini("audio.mp3", 60.0)
 
             self.assertEqual(result, "[]")
-            mock_configure.assert_not_called()
-            mock_upload.assert_not_called()
-            mock_gen_model.assert_not_called()
+            mock_client_cls.assert_not_called()
 
-    @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_fallback_to_legacy_gemini_api_key_when_keys_empty(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls
     ):
         """
         Verify backward compatibility: if GEMINI_API_KEYS is empty, GEMINI_API_KEY is used.
         """
-        mock_model = mock.Mock()
-        mock_model.generate_content.return_value = mock.Mock(text='[{"start": 0, "end": 5}]')
-        mock_gen_model.return_value = mock_model
-        mock_upload.return_value = "file_handle"
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "file_handle"
+        mock_client.files.upload.return_value = fake_file
+        mock_client.models.generate_content.return_value = mock.Mock(
+            text='[{"start": 0, "end": 5}]'
+        )
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = []
@@ -315,7 +346,8 @@ class GeminiFallbackTest(TestCase):
             result = self.ad_manager._get_ad_segments_from_gemini("audio.mp3", 60.0)
 
             self.assertEqual(result, '[{"start": 0, "end": 5}]')
-            mock_configure.assert_called_once_with(api_key="legacy-single-key")
+            mock_client_cls.assert_called_once_with(api_key="legacy-single-key")
+            mock_client.files.delete.assert_called_once_with(name="file_handle")
 
     def test_is_rate_limit_error_detection(self):
         """
@@ -404,20 +436,19 @@ class GeminiFallbackTest(TestCase):
         err = genai_errors.APIError(429, {"error": {"details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17.5s"}]}})
         self.assertEqual(AdManager._extract_retry_delay(err), 17.5)
 
-    @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_generation_config_response_mime_type(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls
     ):
         """
-        Verify that generation_config={"response_mime_type": "application/json"} is always passed.
+        Verify that GenerateContentConfig with response_mime_type="application/json" is always passed.
         """
-        mock_model = mock.Mock()
-        mock_model.generate_content.return_value = mock.Mock(text='[]')
-        mock_gen_model.return_value = mock_model
-        mock_upload.return_value = "file_handle"
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "file_handle"
+        mock_client.files.upload.return_value = fake_file
+        mock_client.models.generate_content.return_value = mock.Mock(text='[]')
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1"]
@@ -425,29 +456,30 @@ class GeminiFallbackTest(TestCase):
 
             self.ad_manager._get_ad_segments_from_gemini("audio.mp3", 60.0)
 
-            mock_gen_model.assert_called_once_with(
-                "gemini-3.8-flash",
-                generation_config={"response_mime_type": "application/json"},
-            )
+            mock_client.models.generate_content.assert_called_once()
+            call_kwargs = mock_client.models.generate_content.call_args.kwargs
+            self.assertEqual(call_kwargs["model"], "gemini-3.8-flash")
+            self.assertEqual(call_kwargs["config"].response_mime_type, "application/json")
+            mock_client.files.delete.assert_called_once_with(name="file_handle")
 
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    @mock.patch("podcasts.tasks.genai.configure")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_non_429_error_does_not_sleep_before_fallback(
-        self, mock_configure, mock_gen_model, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify that non-429 error on primary model falls back immediately without sleeping.
         """
-        mock_primary = mock.Mock()
-        mock_primary.generate_content.side_effect = Exception("500 Internal Server Error")
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "file_handle"
+        mock_client.files.upload.return_value = fake_file
 
-        mock_fallback = mock.Mock()
-        mock_fallback.generate_content.return_value = mock.Mock(text='[{"start": 1, "end": 2}]')
-
-        mock_gen_model.side_effect = [mock_primary, mock_fallback]
-        mock_upload.return_value = "file_handle"
+        mock_client.models.generate_content.side_effect = [
+            Exception("500 Internal Server Error"),
+            mock.Mock(text='[{"start": 1, "end": 2}]'),
+        ]
 
         with mock.patch("podcasts.tasks.settings") as mock_settings:
             mock_settings.GEMINI_API_KEYS = ["key-1"]
@@ -458,5 +490,6 @@ class GeminiFallbackTest(TestCase):
 
             self.assertEqual(result, '[{"start": 1, "end": 2}]')
             mock_sleep.assert_not_called()
-            self.assertEqual(mock_gen_model.call_count, 2)
+            self.assertEqual(mock_client.models.generate_content.call_count, 2)
+            mock_client.files.delete.assert_called_once_with(name="file_handle")
 
