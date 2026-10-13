@@ -3,6 +3,7 @@ Tests for Gemini multi-API-key fallback, per-key upload isolation, and 429 retry
 """
 from unittest import mock
 from django.test import TestCase
+from google.genai import errors as genai_errors
 from podcasts.tasks import AdManager
 from podcasts.models import Podcast, Episode
 
@@ -386,6 +387,22 @@ class GeminiFallbackTest(TestCase):
             AdManager._extract_retry_delay(Exception("429 ResourceExhausted without delay")),
             10.0,
         )
+
+    def test_is_rate_limit_error_with_genai_api_error(self):
+        """
+        Verify that google.genai.errors.APIError instances with 429 are recognized as rate limit errors.
+        """
+        err_429 = genai_errors.APIError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Resource exhausted"}})
+        self.assertTrue(AdManager._is_rate_limit_error(err_429))
+        err_500 = genai_errors.APIError(500, {"error": {"code": 500, "status": "INTERNAL", "message": "Server error"}})
+        self.assertFalse(AdManager._is_rate_limit_error(err_500))
+
+    def test_extract_retry_delay_from_genai_api_error_details(self):
+        """
+        Verify that retry delay is correctly extracted from google.genai.errors.APIError details.
+        """
+        err = genai_errors.APIError(429, {"error": {"details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17.5s"}]}})
+        self.assertEqual(AdManager._extract_retry_delay(err), 17.5)
 
     @mock.patch("podcasts.tasks.time.sleep")
     @mock.patch("podcasts.tasks.genai.upload_file")

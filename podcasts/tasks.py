@@ -17,6 +17,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import feedparser
 import google.generativeai as genai
+from google.genai import errors as genai_errors, types as genai_types
+from google.genai import errors, types
+from pydantic import BaseModel, Field
 import requests
 from django.conf import settings
 from django.utils import timezone
@@ -75,6 +78,14 @@ Example Output:
 """
 
 
+class AdSegmentSchema(BaseModel):
+    """Pydantic schema for structured Gemini ad segment output."""
+
+    start: float = Field(..., description="Start timestamp of the segment in seconds.")
+    end: float = Field(..., description="End timestamp of the segment in seconds.")
+    label: str = Field(..., description="Classification label for the segment.")
+
+
 class AdManager:
     """Handles the analysis of audio files to detect ad segments using the Gemini API."""
 
@@ -86,12 +97,25 @@ class AdManager:
     @staticmethod
     def _is_rate_limit_error(exc: Exception) -> bool:
         """Determines if an exception corresponds to an HTTP 429 rate limit or quota exhaustion."""
+        if isinstance(exc, genai_errors.APIError):
+            if (
+                exc.code == 429
+                or str(exc.code) == "429"
+                or getattr(exc, "status", None) == "RESOURCE_EXHAUSTED"
+            ):
+                return True
+            return False
+
         code = (
             getattr(exc, "code", None)
             or getattr(exc, "status_code", None)
             or getattr(exc, "http_status", None)
         )
         if code == 429 or str(code) == "429":
+            return True
+
+        status = getattr(exc, "status", None)
+        if status == "RESOURCE_EXHAUSTED":
             return True
 
         type_name = type(exc).__name__
@@ -116,6 +140,59 @@ class AdManager:
     @staticmethod
     def _extract_retry_delay(exc: Exception) -> float:
         """Extracts the retry delay in seconds from an exception or defaults to 10.0s."""
+        # Check details in exc (e.g. google.genai.errors.APIError)
+        details = getattr(exc, "details", None)
+        if details:
+            if isinstance(details, str):
+                try:
+                    details = json.loads(details)
+                except Exception:
+                    pass
+
+            def _parse_delay_value(val: Any) -> Optional[float]:
+                if isinstance(val, (int, float)):
+                    return max(0.0, float(val))
+                if isinstance(val, str):
+                    v = val.strip()
+                    if v.endswith(("s", "S")):
+                        v = v[:-1].strip()
+                    try:
+                        return max(0.0, float(v))
+                    except (ValueError, TypeError):
+                        pass
+                if hasattr(val, "total_seconds"):
+                    try:
+                        return max(0.0, float(val.total_seconds()))
+                    except (ValueError, TypeError):
+                        pass
+                if hasattr(val, "seconds"):
+                    try:
+                        return max(0.0, float(val.seconds))
+                    except (ValueError, TypeError):
+                        pass
+                return None
+
+            def _find_retry_delay(data: Any) -> Optional[float]:
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if k in ("retryDelay", "retry_delay", "retryAfter", "retry_after"):
+                            parsed = _parse_delay_value(v)
+                            if parsed is not None:
+                                return parsed
+                        found = _find_retry_delay(v)
+                        if found is not None:
+                            return found
+                elif isinstance(data, list):
+                    for item in data:
+                        found = _find_retry_delay(item)
+                        if found is not None:
+                            return found
+                return None
+
+            delay = _find_retry_delay(details)
+            if delay is not None:
+                return delay
+
         for attr in ("retry_delay", "retry_after"):
             delay_val = getattr(exc, attr, None)
             if delay_val is not None:
@@ -148,6 +225,14 @@ class AdManager:
         if m2:
             try:
                 return max(0.0, float(m2.group(1)))
+            except ValueError:
+                pass
+
+        # Regex 3: retryDelay in string representation
+        m3 = re.search(r"retryDelay[\'\"]?\s*:\s*[\'\"]?([0-9.]+)s?", msg, re.IGNORECASE)
+        if m3:
+            try:
+                return max(0.0, float(m3.group(1)))
             except ValueError:
                 pass
 
