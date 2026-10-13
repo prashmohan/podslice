@@ -1,0 +1,33 @@
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Git
+.git/
+.gitignore
+
+# Python bytecode and caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pylint.d/
+
+# Testing and local databases
+db/
+test_media/
+media/
+*.sqlite3
+
+# Superpowers / agent artifacts
+.superpowers/
+
+# Environment files
+.env
+.env.*
+!.env.example
