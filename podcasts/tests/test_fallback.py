@@ -504,3 +504,212 @@ class GeminiFallbackTest(TestCase):
             mock_sleep.assert_not_called()
             self.assertEqual(mock_client.models.generate_content.call_count, 2)
             mock_client.files.delete.assert_called_once_with(name="file_handle")
+
+    @mock.patch("podcasts.tasks.time.sleep")
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_empty_or_none_response_text_triggers_fallback_and_records_telemetry(
+        self, mock_client_cls, _mock_sleep
+    ):
+        """
+        Adversarial test: verify that None or empty response.text (e.g. safety blocked)
+        is treated as an attempt error and triggers rotation to the next key.
+        """
+        client_k1 = mock.Mock()
+        client_k1.files.upload.return_value = mock.Mock(name="file1")
+        # Key 1 returns response with None text (e.g. FinishReason.SAFETY)
+        empty_candidate = mock.Mock(finish_reason="SAFETY")
+        client_k1.models.generate_content.return_value = mock.Mock(
+            text=None, candidates=[empty_candidate]
+        )
+
+        client_k2 = mock.Mock()
+        client_k2.files.upload.return_value = mock.Mock(name="file2")
+        # Key 2 returns valid ad segments
+        client_k2.models.generate_content.return_value = mock.Mock(
+            text='[{"start": 10.0, "end": 20.0, "label": "ad"}]'
+        )
+
+        def client_side_effect(api_key):
+            return client_k1 if api_key == "key-1" else client_k2
+
+        mock_client_cls.side_effect = client_side_effect
+
+        with mock.patch("podcasts.tasks.settings") as mock_settings:
+            mock_settings.GEMINI_API_KEYS = ["key-1", "key-2"]
+            mock_settings.GEMINI_MODEL = "primary-model"
+            mock_settings.FALLBACK_GEMINI_MODEL = "fallback-model"
+
+            result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3", 60.0)
+
+            self.assertEqual(result, '[{"start": 10.0, "end": 20.0, "label": "ad"}]')
+            telemetry = self.ad_manager.last_telemetry
+            self.assertEqual(len(telemetry["attempts"]), 2)
+            self.assertEqual(telemetry["attempts"][0]["status"], "error")
+            self.assertEqual(telemetry["attempts"][1]["status"], "success")
+            self.assertEqual(telemetry["model_used"], "primary-model")
+
+    @mock.patch("podcasts.tasks.time.sleep")
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_blocked_empty_response_falls_back_to_fallback_model(
+        self, mock_client_cls, _mock_sleep
+    ):
+        """
+        Adversarial test: verify that empty response text on single key falls back
+        to the secondary fallback model.
+        """
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_client.files.upload.return_value = mock.Mock(name="file1")
+
+        # Primary model returns empty string, fallback model returns valid JSON
+        mock_client.models.generate_content.side_effect = [
+            mock.Mock(text="", candidates=[mock.Mock(finish_reason="BLOCKLIST")]),
+            mock.Mock(text='[{"start": 5.0, "end": 15.0, "label": "ad"}]'),
+        ]
+
+        with mock.patch("podcasts.tasks.settings") as mock_settings:
+            mock_settings.GEMINI_API_KEYS = ["key-1"]
+            mock_settings.GEMINI_MODEL = "primary-model"
+            mock_settings.FALLBACK_GEMINI_MODEL = "fallback-model"
+
+            result = self.ad_manager._get_ad_segments_from_gemini("fake_path.mp3", 60.0)
+
+            self.assertEqual(result, '[{"start": 5.0, "end": 15.0, "label": "ad"}]')
+            telemetry = self.ad_manager.last_telemetry
+            self.assertTrue(telemetry["fallback_used"])
+            self.assertEqual(telemetry["model_used"], "fallback-model")
+
+    def test_extract_retry_delay_from_protobuf_duration_dict(self):
+        """
+        Adversarial test: verify that retry delay in protobuf RetryInfo dict
+        (with seconds and nanos) is accurately parsed as a float.
+        """
+        err = genai_errors.APIError(
+            429,
+            {
+                "error": {
+                    "details": [
+                        {
+                            "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                            "retryDelay": {"seconds": 25, "nanos": 500000000},
+                        }
+                    ]
+                }
+            },
+        )
+        self.assertEqual(AdManager._extract_retry_delay(err), 25.5)
+
+    def test_extract_retry_delay_from_protobuf_duration_object(self):
+        """
+        Adversarial test: verify that retry delay in protobuf object attributes
+        (with .seconds and .nanos) is accurately parsed.
+        """
+        class ProtoDuration:
+            seconds = 14
+            nanos = 250000000
+
+        class ProtoRetryInfo:
+            retryDelay = ProtoDuration()
+
+        class ProtoRpcError(Exception):
+            details = [ProtoRetryInfo()]
+
+        self.assertEqual(AdManager._extract_retry_delay(ProtoRpcError()), 14.25)
+
+    def test_extract_retry_delay_nan_and_inf_safe_fallback(self):
+        """
+        Adversarial test: verify that NaN, Inf, and negative delays fall back safely to 10.0s.
+        """
+        class NanError(Exception):
+            retry_delay = float("nan")
+
+        class InfError(Exception):
+            retry_delay = float("inf")
+
+        class NegativeError(Exception):
+            retry_delay = -5.0
+
+        self.assertEqual(AdManager._extract_retry_delay(NanError()), 10.0)
+        self.assertEqual(AdManager._extract_retry_delay(InfError()), 10.0)
+        self.assertEqual(AdManager._extract_retry_delay(NegativeError()), 10.0)
+
+    @mock.patch("podcasts.tasks.time.sleep")
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_string_max_retry_delay_setting_coercion(
+        self, mock_client_cls, mock_sleep
+    ):
+        """
+        Adversarial test: verify string GEMINI_MAX_RETRY_DELAY_SEC does not crash with TypeError
+        and caps sleep_sec cleanly.
+        """
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_client.files.upload.return_value = mock.Mock(name="file1")
+
+        err_429 = genai_errors.APIError(
+            429,
+            {"error": {"details": [{"retryDelay": "45s"}]}},
+        )
+        mock_client.models.generate_content.side_effect = [
+            err_429,
+            mock.Mock(text='[{"start": 1, "end": 2}]'),
+        ]
+
+        with mock.patch("podcasts.tasks.settings") as mock_settings:
+            mock_settings.GEMINI_API_KEYS = ["key-1"]
+            mock_settings.GEMINI_MODEL = "primary-model"
+            mock_settings.FALLBACK_GEMINI_MODEL = "fallback-model"
+            mock_settings.GEMINI_MAX_RETRY_DELAY_SEC = "15"  # String from env
+
+            result = self.ad_manager._get_ad_segments_from_gemini("audio.mp3", 60.0)
+
+            self.assertEqual(result, '[{"start": 1, "end": 2}]')
+            mock_sleep.assert_called_once_with(15.0)
+
+    def test_is_rate_limit_error_with_callable_code_and_enums(self):
+        """
+        Adversarial test: verify callable .code() and enum status/code are recognized as 429.
+        """
+        class CallableCodeError(Exception):
+            def code(self):
+                return 429
+
+        class EnumCode:
+            name = "RESOURCE_EXHAUSTED"
+            value = 429
+
+        class EnumCodeError(Exception):
+            code = EnumCode()
+
+        class WrappedError(Exception):
+            pass
+
+        wrapped = WrappedError("Wrapper error")
+        wrapped.__cause__ = genai_errors.APIError(429, "Rate limit exceeded")
+
+        self.assertTrue(AdManager._is_rate_limit_error(CallableCodeError()))
+        self.assertTrue(AdManager._is_rate_limit_error(EnumCodeError()))
+        self.assertTrue(AdManager._is_rate_limit_error(wrapped))
+
+    def test_cleanup_remote_files_with_malformed_objects(self):
+        """
+        Adversarial test: verify _cleanup_remote_files handles None objects, strings,
+        and broken clients gracefully without raising exceptions.
+        """
+        broken_client = mock.Mock()
+        broken_client.files.delete.side_effect = Exception("Delete failed: 404")
+
+        uploaded_files = {
+            "key-1": None,
+            "key-2": "file-as-string",
+            "key-3": mock.Mock(name="file-obj"),
+        }
+        clients = {
+            "key-1": mock.Mock(),
+            "key-2": broken_client,
+            "key-3": None,
+        }
+
+        # Should execute completely without raising any exceptions
+        AdManager._cleanup_remote_files(uploaded_files, clients)
+        broken_client.files.delete.assert_called_once_with(name="file-as-string")

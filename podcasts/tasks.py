@@ -96,41 +96,75 @@ class AdManager:
     @staticmethod
     def _is_rate_limit_error(exc: Exception) -> bool:
         """Determines if an exception corresponds to an HTTP 429 rate limit or quota exhaustion."""
-        if isinstance(exc, errors.APIError):
-            if (
-                exc.code == 429
-                or str(exc.code) == "429"
-                or getattr(exc, "status", None) == "RESOURCE_EXHAUSTED"
+        def _check_single(e: Any) -> bool:
+            if not e:
+                return False
+            if isinstance(e, errors.APIError):
+                if (
+                    e.code == 429
+                    or str(e.code) == "429"
+                    or getattr(e, "status", None) == "RESOURCE_EXHAUSTED"
+                ):
+                    return True
+
+            code = (
+                getattr(e, "code", None)
+                or getattr(e, "status_code", None)
+                or getattr(e, "http_status", None)
+            )
+            if callable(code):
+                try:
+                    code = code()
+                except Exception:
+                    code = None
+
+            if code is not None:
+                if code == 429 or str(code) == "429":
+                    return True
+                if (
+                    getattr(code, "value", None) == 429
+                    or str(getattr(code, "value", None)) == "429"
+                ):
+                    return True
+                if getattr(code, "name", None) in (
+                    "RESOURCE_EXHAUSTED",
+                    "TOO_MANY_REQUESTS",
+                ):
+                    return True
+
+            status = getattr(e, "status", None)
+            if status == "RESOURCE_EXHAUSTED":
+                return True
+            if getattr(status, "name", None) in (
+                "RESOURCE_EXHAUSTED",
+                "TOO_MANY_REQUESTS",
             ):
                 return True
 
-        code = (
-            getattr(exc, "code", None)
-            or getattr(exc, "status_code", None)
-            or getattr(exc, "http_status", None)
-        )
-        if code == 429 or str(code) == "429":
-            return True
+            type_name = type(e).__name__
+            if any(
+                name in type_name
+                for name in ("ResourceExhausted", "RateLimit", "TooManyRequests")
+            ):
+                return True
 
-        status = getattr(exc, "status", None)
-        if status == "RESOURCE_EXHAUSTED":
-            return True
+            msg = str(e)
+            if (
+                "429" in msg
+                or "ResourceExhausted" in msg
+                or "RESOURCE_EXHAUSTED" in msg
+                or "rate limit" in msg.lower()
+                or "quota exceeded" in msg.lower()
+            ):
+                return True
 
-        type_name = type(exc).__name__
-        if any(
-            name in type_name
-            for name in ("ResourceExhausted", "RateLimit", "TooManyRequests")
-        ):
-            return True
+            return False
 
-        msg = str(exc)
-        if (
-            "429" in msg
-            or "ResourceExhausted" in msg
-            or "RESOURCE_EXHAUSTED" in msg
-            or "rate limit" in msg.lower()
-            or "quota exceeded" in msg.lower()
-        ):
+        if _check_single(exc):
+            return True
+        if _check_single(getattr(exc, "__cause__", None)):
+            return True
+        if _check_single(getattr(exc, "__context__", None)):
             return True
 
         return False
@@ -138,6 +172,76 @@ class AdManager:
     @staticmethod
     def _extract_retry_delay(exc: Exception) -> float:
         """Extracts the retry delay in seconds from an exception or defaults to 10.0s."""
+        def _to_valid_delay(val: Any) -> Optional[float]:
+            try:
+                f = float(val)
+                if math.isnan(f) or math.isinf(f) or f < 0:
+                    return None
+                return f
+            except (ValueError, TypeError):
+                return None
+
+        def _parse_delay_value(val: Any) -> Optional[float]:
+            if val is None:
+                return None
+            if isinstance(val, (int, float)):
+                return _to_valid_delay(val)
+            if isinstance(val, str):
+                v = val.strip()
+                if v.endswith(("s", "S")):
+                    v = v[:-1].strip()
+                parsed = _to_valid_delay(v)
+                if parsed is not None:
+                    return parsed
+            if hasattr(val, "total_seconds"):
+                try:
+                    parsed = _to_valid_delay(val.total_seconds())
+                    if parsed is not None:
+                        return parsed
+                except (ValueError, TypeError):
+                    pass
+            if isinstance(val, dict):
+                if "seconds" in val or "nanos" in val:
+                    try:
+                        sec = float(val.get("seconds", 0) or 0)
+                        nanos = float(val.get("nanos", 0) or 0)
+                        return _to_valid_delay(sec + nanos / 1e9)
+                    except (ValueError, TypeError):
+                        pass
+            if hasattr(val, "seconds"):
+                try:
+                    sec = float(val.seconds)
+                    nanos = float(getattr(val, "nanos", 0) or 0)
+                    return _to_valid_delay(sec + nanos / 1e9)
+                except (ValueError, TypeError):
+                    pass
+            return None
+
+        def _find_retry_delay(data: Any) -> Optional[float]:
+            if data is None:
+                return None
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if k in ("retryDelay", "retry_delay", "retryAfter", "retry_after"):
+                        parsed = _parse_delay_value(v)
+                        if parsed is not None:
+                            return parsed
+                    found = _find_retry_delay(v)
+                    if found is not None:
+                        return found
+            elif isinstance(data, (list, tuple)):
+                for item in data:
+                    found = _find_retry_delay(item)
+                    if found is not None:
+                        return found
+            else:
+                for attr in ("retry_delay", "retryDelay", "retry_after", "retryAfter"):
+                    if hasattr(data, attr):
+                        parsed = _parse_delay_value(getattr(data, attr))
+                        if parsed is not None:
+                            return parsed
+            return None
+
         # Check details in exc (e.g. google.genai.errors.APIError)
         details = getattr(exc, "details", None)
         if details:
@@ -147,46 +251,6 @@ class AdManager:
                 except Exception:
                     pass
 
-            def _parse_delay_value(val: Any) -> Optional[float]:
-                if isinstance(val, (int, float)):
-                    return max(0.0, float(val))
-                if isinstance(val, str):
-                    v = val.strip()
-                    if v.endswith(("s", "S")):
-                        v = v[:-1].strip()
-                    try:
-                        return max(0.0, float(v))
-                    except (ValueError, TypeError):
-                        pass
-                if hasattr(val, "total_seconds"):
-                    try:
-                        return max(0.0, float(val.total_seconds()))
-                    except (ValueError, TypeError):
-                        pass
-                if hasattr(val, "seconds"):
-                    try:
-                        return max(0.0, float(val.seconds))
-                    except (ValueError, TypeError):
-                        pass
-                return None
-
-            def _find_retry_delay(data: Any) -> Optional[float]:
-                if isinstance(data, dict):
-                    for k, v in data.items():
-                        if k in ("retryDelay", "retry_delay", "retryAfter", "retry_after"):
-                            parsed = _parse_delay_value(v)
-                            if parsed is not None:
-                                return parsed
-                        found = _find_retry_delay(v)
-                        if found is not None:
-                            return found
-                elif isinstance(data, list):
-                    for item in data:
-                        found = _find_retry_delay(item)
-                        if found is not None:
-                            return found
-                return None
-
             delay = _find_retry_delay(details)
             if delay is not None:
                 return delay
@@ -194,45 +258,31 @@ class AdManager:
         for attr in ("retry_delay", "retry_after"):
             delay_val = getattr(exc, attr, None)
             if delay_val is not None:
-                if hasattr(delay_val, "total_seconds"):
-                    try:
-                        return max(0.0, float(delay_val.total_seconds()))
-                    except (ValueError, TypeError):
-                        pass
-                if hasattr(delay_val, "seconds"):
-                    try:
-                        return max(0.0, float(delay_val.seconds))
-                    except (ValueError, TypeError):
-                        pass
-                try:
-                    return max(0.0, float(delay_val))
-                except (ValueError, TypeError):
-                    pass
+                parsed = _parse_delay_value(delay_val)
+                if parsed is not None:
+                    return parsed
 
         msg = str(exc)
         # Regex 1: "retry in 15.5s" or "retry in 10s"
         m1 = re.search(r"retry in ([0-9.]+)s", msg, re.IGNORECASE)
         if m1:
-            try:
-                return max(0.0, float(m1.group(1)))
-            except ValueError:
-                pass
+            parsed = _to_valid_delay(m1.group(1))
+            if parsed is not None:
+                return parsed
 
         # Regex 2: "seconds: 15" or "seconds: 15.5"
         m2 = re.search(r"seconds:\s*([0-9.]+)", msg, re.IGNORECASE)
         if m2:
-            try:
-                return max(0.0, float(m2.group(1)))
-            except ValueError:
-                pass
+            parsed = _to_valid_delay(m2.group(1))
+            if parsed is not None:
+                return parsed
 
         # Regex 3: retryDelay in string representation
         m3 = re.search(r"retryDelay[\'\"]?\s*:\s*[\'\"]?([0-9.]+)s?", msg, re.IGNORECASE)
         if m3:
-            try:
-                return max(0.0, float(m3.group(1)))
-            except ValueError:
-                pass
+            parsed = _to_valid_delay(m3.group(1))
+            if parsed is not None:
+                return parsed
 
         return 10.0
 
@@ -241,6 +291,8 @@ class AdManager:
         uploaded_files: Dict[str, Any], clients: Dict[str, Any]
     ) -> None:
         """Cleans up uploaded remote files from Gemini File API."""
+        if not uploaded_files or not clients:
+            return
         for key, uploaded_file in uploaded_files.items():
             client = clients.get(key)
             if not client or not uploaded_file:
@@ -250,8 +302,11 @@ class AdManager:
             )
             if not file_name:
                 continue
+            files_api = getattr(client, "files", None)
+            if not files_api or not hasattr(files_api, "delete"):
+                continue
             try:
-                client.files.delete(name=file_name)
+                files_api.delete(name=file_name)
                 logger.info("Deleted remote audio file: %s", file_name)
             except Exception as e:
                 logger.warning(
@@ -277,7 +332,7 @@ class AdManager:
         if raw_keys:
             if isinstance(raw_keys, str):
                 api_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-            elif isinstance(raw_keys, (list, tuple)):
+            elif isinstance(raw_keys, (list, tuple, set)):
                 api_keys = [str(k).strip() for k in raw_keys if str(k).strip()]
 
         if not api_keys:
@@ -297,7 +352,6 @@ class AdManager:
         fallback_model = getattr(
             settings, "FALLBACK_GEMINI_MODEL", "gemini-3.5-flash-lite"
         )
-        max_retry_delay = getattr(settings, "GEMINI_MAX_RETRY_DELAY_SEC", 30)
 
         prompt = GEMINI_PROMPT.format(
             episode_title=self.episode.title if self.episode else "",
@@ -336,13 +390,26 @@ class AdManager:
                         response_schema=list[AdSegmentSchema],
                     ),
                 )
+                text = getattr(response, "text", None)
+                if not text or not str(text).strip():
+                    reason = None
+                    candidates = getattr(response, "candidates", None)
+                    if candidates and len(candidates) > 0:
+                        reason = getattr(candidates[0], "finish_reason", None)
+                    err_msg = (
+                        f"Gemini returned empty or blocked response text (finish_reason={reason})"
+                        if reason
+                        else "Gemini returned empty response text"
+                    )
+                    raise RuntimeError(err_msg)
+
                 gemini_telemetry["attempts"].append({
                     "model": model_name,
                     "key_masked": masked,
                     "status": "success",
                 })
                 gemini_telemetry["model_used"] = model_name
-                return response.text
+                return text
             except Exception as e:
                 is_429 = self._is_rate_limit_error(e)
                 attempt_entry = {
@@ -386,8 +453,33 @@ class AdManager:
             # Phase 2: If all keys failed on primary model and at least one was 429, retry primary once
             if retry_delays:
                 gemini_telemetry["retry_attempts"] += 1
-                sleep_sec = min(*retry_delays, max_retry_delay)
-                sleep_sec = max(0.0, float(sleep_sec))
+                try:
+                    max_retry_delay = float(
+                        getattr(settings, "GEMINI_MAX_RETRY_DELAY_SEC", 30.0) or 30.0
+                    )
+                except (ValueError, TypeError):
+                    max_retry_delay = 30.0
+
+                valid_delays = [
+                    d
+                    for d in retry_delays
+                    if isinstance(d, (int, float))
+                    and not math.isnan(d)
+                    and not math.isinf(d)
+                    and d >= 0
+                ]
+                sleep_sec = (
+                    min(*valid_delays, max_retry_delay)
+                    if valid_delays
+                    else min(10.0, max_retry_delay)
+                )
+                if (
+                    math.isnan(sleep_sec)
+                    or math.isinf(sleep_sec)
+                    or sleep_sec < 0
+                ):
+                    sleep_sec = 10.0
+
                 logger.info(
                     "All keys rate limited on primary model %s. Sleeping %.1fs before retry.",
                     primary_model,
