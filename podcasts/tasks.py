@@ -383,7 +383,7 @@ class AdManager:
             # Phase 2: If all keys failed on primary model and at least one was 429, retry primary once
             if retry_delays:
                 gemini_telemetry["retry_attempts"] += 1
-                sleep_sec = min(min(retry_delays), max_retry_delay)
+                sleep_sec = min(*retry_delays, max_retry_delay)
                 sleep_sec = max(0.0, float(sleep_sec))
                 logger.info(
                     "All keys rate limited on primary model %s. Sleeping %.1fs before retry.",

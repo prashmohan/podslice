@@ -815,7 +815,7 @@ class EpisodeProcessorTest(PodcastTestCase):
     @mock.patch("podcasts.tasks.time.sleep")
     @mock.patch("podcasts.tasks.genai.Client")
     def test_gemini_telemetry_retry_and_recovery(
-        self, mock_client_cls, mock_sleep
+        self, mock_client_cls, _mock_sleep
     ):
         """
         Verify telemetry records 429 retries and marks retry_recovered as True on recovery.
@@ -853,7 +853,7 @@ class EpisodeProcessorTest(PodcastTestCase):
     @mock.patch("podcasts.tasks.time.sleep")
     @mock.patch("podcasts.tasks.genai.Client")
     def test_gemini_telemetry_fallback_model_used(
-        self, mock_client_cls, mock_sleep
+        self, mock_client_cls, _mock_sleep
     ):
         """
         Verify telemetry records fallback model usage when primary model fails permanently.
@@ -868,7 +868,7 @@ class EpisodeProcessorTest(PodcastTestCase):
             model = kwargs.get("model", "")
             if "lite" in model:
                 return mock.Mock(text='[{"start": 5.0, "end": 15.0}]')
-            raise Exception("Primary model permanently down")
+            raise RuntimeError("Primary model permanently down")
 
         mock_client.models.generate_content.side_effect = generate_content_side_effect
 

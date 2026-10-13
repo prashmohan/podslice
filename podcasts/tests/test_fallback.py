@@ -1,6 +1,7 @@
 """
 Tests for Gemini multi-API-key fallback, per-key upload isolation, and 429 retry handling.
 """
+# pylint: disable=protected-access,missing-class-docstring,missing-function-docstring,too-few-public-methods
 from unittest import mock
 from django.test import TestCase
 from google.genai import errors as genai_errors
@@ -115,7 +116,7 @@ class GeminiFallbackTest(TestCase):
     @mock.patch("podcasts.tasks.time.sleep")
     @mock.patch("podcasts.tasks.genai.Client")
     def test_per_key_upload_isolation_and_caching(
-        self, mock_client_cls, mock_sleep
+        self, mock_client_cls, _mock_sleep
     ):
         """
         Verify genai.upload_file is called once per distinct API key, and cached file handle is reused.
@@ -424,16 +425,27 @@ class GeminiFallbackTest(TestCase):
         """
         Verify that google.genai.errors.APIError instances with 429 are recognized as rate limit errors.
         """
-        err_429 = genai_errors.APIError(429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Resource exhausted"}})
+        err_429 = genai_errors.APIError(
+            429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Resource exhausted"}}
+        )
         self.assertTrue(AdManager._is_rate_limit_error(err_429))
-        err_500 = genai_errors.APIError(500, {"error": {"code": 500, "status": "INTERNAL", "message": "Server error"}})
+        err_500 = genai_errors.APIError(
+            500, {"error": {"code": 500, "status": "INTERNAL", "message": "Server error"}}
+        )
         self.assertFalse(AdManager._is_rate_limit_error(err_500))
 
     def test_extract_retry_delay_from_genai_api_error_details(self):
         """
         Verify that retry delay is correctly extracted from google.genai.errors.APIError details.
         """
-        err = genai_errors.APIError(429, {"error": {"details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17.5s"}]}})
+        err = genai_errors.APIError(
+            429,
+            {
+                "error": {
+                    "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "17.5s"}]
+                }
+            },
+        )
         self.assertEqual(AdManager._extract_retry_delay(err), 17.5)
 
     @mock.patch("podcasts.tasks.genai.Client")
@@ -492,4 +504,3 @@ class GeminiFallbackTest(TestCase):
             mock_sleep.assert_not_called()
             self.assertEqual(mock_client.models.generate_content.call_count, 2)
             mock_client.files.delete.assert_called_once_with(name="file_handle")
-

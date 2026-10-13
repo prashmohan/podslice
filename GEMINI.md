@@ -25,7 +25,7 @@ Podslice is a Django-based application designed to download podcast episodes, sl
 -   **Libraries:**
     -   `feedparser`: For parsing podcast RSS feeds.
     -   `requests`: For making HTTP requests.
-    -   `google-generativeai`: For interacting with Google's generative AI.
+    -   `google-genai`: For interacting with Google's generative AI.
     -   `pydub`: For audio manipulation.
 
 ## Common Tasks
