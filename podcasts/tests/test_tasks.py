@@ -75,24 +75,28 @@ class TasksClassMethodsTest(PodcastTestCase):
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.FAILED)
 
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
-    def test_get_ad_segments_from_gemini(self, mock_generative_model, mock_upload_file):
+    @override_settings(GEMINI_API_KEYS=["test-key-1"])
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_get_ad_segments_from_gemini(self, mock_client_cls):
         """
         Test fetching ad segments from Gemini.
         """
-        mock_model_instance = mock.Mock()
-        mock_model_instance.generate_content.return_value = mock.Mock(
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_file = mock.Mock()
+        mock_file.name = "fake_file_id"
+        mock_client.files.upload.return_value = mock_file
+        mock_client.models.generate_content.return_value = mock.Mock(
             text='[{"start": 10, "end": 20}]'
         )
-        mock_generative_model.return_value = mock_model_instance
-        mock_upload_file.return_value = "fake_file_id"
 
         response = self.ad_manager._get_ad_segments_from_gemini(  # pylint: disable=protected-access
             "dummy_path.mp3", 60.0
         )
         self.assertEqual(response, '[{"start": 10, "end": 20}]')
-        mock_upload_file.assert_called_once_with(path="dummy_path.mp3")
+        mock_client.files.upload.assert_called_once_with(file="dummy_path.mp3")
+        mock_client.models.generate_content.assert_called_once()
+        mock_client.files.delete.assert_called_once_with(name="fake_file_id")
 
     def test_parse_ad_segments_valid_json(self):
         """
@@ -646,6 +650,9 @@ class EpisodeProcessorTest(PodcastTestCase):
 
     @mock.patch("podcasts.tasks.genai.Client")
     def test_remote_file_cleanup_after_analysis(self, mock_client_cls):
+        """
+        Verify that uploaded remote files are deleted after successful analysis.
+        """
         mock_client = mock.Mock()
         mock_client_cls.return_value = mock_client
         fake_file = mock.Mock()
@@ -668,6 +675,9 @@ class EpisodeProcessorTest(PodcastTestCase):
 
     @mock.patch("podcasts.tasks.genai.Client")
     def test_remote_file_cleanup_on_error(self, mock_client_cls):
+        """
+        Verify that uploaded remote files are deleted when an error occurs during analysis.
+        """
         mock_client = mock.Mock()
         mock_client_cls.return_value = mock_client
         fake_file = mock.Mock()
@@ -686,6 +696,32 @@ class EpisodeProcessorTest(PodcastTestCase):
             name="files/test-remote-audio-err"
         )
 
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_remote_file_cleanup_exception_suppressed(self, mock_client_cls):
+        """
+        Verify that exceptions raised during remote file cleanup are suppressed and do not crash analysis.
+        """
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        fake_file = mock.Mock()
+        fake_file.name = "files/test-remote-audio-del-err"
+        mock_client.files.upload.return_value = fake_file
+        mock_client.models.generate_content.return_value = mock.Mock(
+            text='[{"start": 0, "end": 10, "label": "intro"}]'
+        )
+        mock_client.files.delete.side_effect = Exception("Delete failed due to network error")
+
+        with mock.patch("podcasts.tasks.settings") as mock_settings:
+            mock_settings.GEMINI_API_KEYS = ["key-cleanup-del-err"]
+            mock_settings.GEMINI_MODEL = "gemini-3.8-flash"
+            mock_settings.FALLBACK_GEMINI_MODEL = "gemini-3.5-flash-lite"
+            res = self.ad_manager._get_ad_segments_from_gemini("dummy.mp3", 30.0)
+
+        self.assertEqual(res, '[{"start": 0, "end": 10, "label": "intro"}]')
+        mock_client.files.delete.assert_called_once_with(
+            name="files/test-remote-audio-del-err"
+        )
+
     @mock.patch("podcasts.tasks.EpisodeProcessor._slice_and_save_audio")
     @mock.patch("podcasts.tasks.AdManager.analyze_audio", return_value=[{"start": 10.0, "end": 20.0}])
     @mock.patch("podcasts.tasks.EpisodeProcessor._get_audio_duration", return_value=60.0)
@@ -693,6 +729,9 @@ class EpisodeProcessorTest(PodcastTestCase):
     def test_rehost_audio_records_processing_metrics(
         self, mock_download, mock_duration, mock_analyze, mock_slice
     ):
+        """
+        Verify that rehost_audio records successful processing metrics across all stages.
+        """
         self.processor.rehost_audio()
         self.episode.refresh_from_db()
         self.assertIsNotNone(self.episode.processing_metrics)
@@ -704,6 +743,9 @@ class EpisodeProcessorTest(PodcastTestCase):
 
     @mock.patch("podcasts.tasks.EpisodeProcessor._download_audio", side_effect=Exception("Network failure"))
     def test_rehost_audio_records_error_metrics_on_failure(self, mock_download):
+        """
+        Verify that rehost_audio records failed stage and unresolved_error metrics on download failure.
+        """
         self.processor.rehost_audio()
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.FAILED)
@@ -718,6 +760,9 @@ class EpisodeProcessorTest(PodcastTestCase):
     def test_rehost_audio_ai_disabled_skipped_metrics(
         self, mock_download, mock_duration, mock_slice
     ):
+        """
+        Verify that rehost_audio records skipped Gemini metrics when AI processing is disabled.
+        """
         self.episode.disable_ai_processing = True
         self.episode.save()
         self.processor.rehost_audio()
@@ -746,6 +791,9 @@ class EpisodeProcessorTest(PodcastTestCase):
     def test_rehost_audio_slicing_failure_records_error(
         self, mock_download, mock_duration, mock_analyze, mock_slice
     ):
+        """
+        Verify that rehost_audio records slicing failure metrics when slicing fails.
+        """
         self.processor.rehost_audio()
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.FAILED)
@@ -765,21 +813,22 @@ class EpisodeProcessorTest(PodcastTestCase):
         FALLBACK_GEMINI_MODEL="gemini-3.5-flash-lite",
     )
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_gemini_telemetry_retry_and_recovery(
-        self, mock_model_cls, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify telemetry records 429 retries and marks retry_recovered as True on recovery.
         """
-        mock_upload.return_value = "fake_file"
-        mock_model_inst = mock.Mock()
-        mock_model_cls.return_value = mock_model_inst
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_file = mock.Mock()
+        mock_file.name = "fake_file"
+        mock_client.files.upload.return_value = mock_file
 
         # First call raises 429 ResourceExhausted, second call succeeds
         rate_limit_err = Exception("429 ResourceExhausted: rate limit exceeded, retry in 5s")
-        mock_model_inst.generate_content.side_effect = [
+        mock_client.models.generate_content.side_effect = [
             rate_limit_err,
             mock.Mock(text='[{"start": 10.0, "end": 20.0}]'),
         ]
@@ -802,28 +851,26 @@ class EpisodeProcessorTest(PodcastTestCase):
         FALLBACK_GEMINI_MODEL="gemini-3.5-flash-lite",
     )
     @mock.patch("podcasts.tasks.time.sleep")
-    @mock.patch("podcasts.tasks.genai.upload_file")
-    @mock.patch("podcasts.tasks.genai.GenerativeModel")
+    @mock.patch("podcasts.tasks.genai.Client")
     def test_gemini_telemetry_fallback_model_used(
-        self, mock_model_cls, mock_upload, mock_sleep
+        self, mock_client_cls, mock_sleep
     ):
         """
         Verify telemetry records fallback model usage when primary model fails permanently.
         """
-        mock_upload.return_value = "fake_file"
-        primary_inst = mock.Mock()
-        primary_inst.generate_content.side_effect = Exception("Primary model permanently down")
-        fallback_inst = mock.Mock()
-        fallback_inst.generate_content.return_value = mock.Mock(
-            text='[{"start": 5.0, "end": 15.0}]'
-        )
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_file = mock.Mock()
+        mock_file.name = "fake_file"
+        mock_client.files.upload.return_value = mock_file
 
-        def model_side_effect(model_name, **kwargs):
-            if "lite" in model_name:
-                return fallback_inst
-            return primary_inst
+        def generate_content_side_effect(*args, **kwargs):
+            model = kwargs.get("model", "")
+            if "lite" in model:
+                return mock.Mock(text='[{"start": 5.0, "end": 15.0}]')
+            raise Exception("Primary model permanently down")
 
-        mock_model_cls.side_effect = model_side_effect
+        mock_client.models.generate_content.side_effect = generate_content_side_effect
 
         result = self.ad_manager._get_ad_segments_from_gemini("fake.mp3", 60.0)
         self.assertEqual(result, '[{"start": 5.0, "end": 15.0}]')
