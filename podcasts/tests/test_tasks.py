@@ -1,6 +1,7 @@
 """
 Tests for the podcast tasks.
 """
+# pylint: disable=too-many-lines
 
 import json
 import os

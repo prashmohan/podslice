@@ -475,13 +475,15 @@ class MetricsServiceTest(TestCase):
     def test_categorize_segment_label_new_categories(self):
         """Verify expanded segment labels map to correct categories."""
         # ads
-        for label in ["network-promo", "cross-promo", "trailer", "merch"]:
+        for label in ["network-promo", "network promo", "cross-promo", "cross promo", "trailer", "merch"]:
             self.assertEqual(categorize_segment_label(label), "ads")
         # intros_outros
         for label in ["recap", "preview", "teaser", "interlude", "silence"]:
             self.assertEqual(categorize_segment_label(label), "intros_outros")
         # ctas
-        for label in ["housekeeping", "tour", "live-show", "patreon", "membership"]:
+        for label in [
+            "housekeeping", "tour", "live-show", "live show", "patreon", "membership", "off-topic", "off topic"
+        ]:
             self.assertEqual(categorize_segment_label(label), "ctas")
 
     def test_get_system_metrics_aggregates_expanded_categories(self):

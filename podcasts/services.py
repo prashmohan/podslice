@@ -73,24 +73,25 @@ def categorize_segment_label(label: Optional[str]) -> str:
     if not label or not isinstance(label, str):
         return "ads"
     norm = label.strip().lower()
+    norm_clean = norm.replace("-", " ").replace("_", " ")
+
     intros_outros_keys = [
         "intro", "outro", "music", "theme", "silence", "interlude", "recap", "preview", "teaser"
     ]
-    if any(k in norm for k in intros_outros_keys):
+    if any(k in norm or k in norm_clean for k in intros_outros_keys):
         return "intros_outros"
+
+    # Network promos and trailers should map to ads even though they contain "promo"
+    if any(k in norm or k in norm_clean for k in ["network promo", "cross promo", "trailer"]):
+        return "ads"
+
     cta_keys = [
         "cta", "call to action", "promo", "promotion", "housekeeping", "tour",
-        "live-show", "patreon", "membership", "off-topic", "other"
+        "live show", "patreon", "membership", "off topic", "other"
     ]
-    if any(k in norm for k in cta_keys):
-        if any(k in norm for k in ["network-promo", "cross-promo", "trailer"]):
-            return "ads"
+    if any(k in norm or k in norm_clean for k in cta_keys):
         return "ctas"
-    ad_keys = [
-        "ad", "sponsor", "advertisement", "cross-promo", "network-promo", "trailer", "merch"
-    ]
-    if any(k in norm for k in ad_keys):
-        return "ads"
+
     return "ads"
 
 
