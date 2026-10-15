@@ -539,6 +539,71 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertContains(response, "Processing & AI Health")
         self.assertContains(response, "429 Retry Recovery")
 
+    def test_subscribe_view_renders_2x2_metrics_grid(self):
+        """
+        Verify that PodcastSubscribeUIView renders the 2x2 metrics grid cards
+        and preserves live status IDs (completed-count and pending-count).
+        """
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("metrics", response.context)
+        # Check 4 card headers
+        self.assertContains(response, "Listener Time Saved")
+        self.assertContains(response, "Processing & AI Health")
+        self.assertContains(response, "API Keys & Quota Balance")
+        self.assertContains(response, "System & Queue Status")
+        # Check preserved live status IDs
+        self.assertContains(response, 'id="completed-count"')
+        self.assertContains(response, 'id="pending-count"')
+        self.assertContains(response, "Operational")
+
+    def test_subscribe_view_renders_key_distribution_and_segment_bars(self):
+        """
+        Verify that key distribution progress bars and ad segment breakdown
+        render properly when telemetry data is present.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Telemetry Episode",
+            guid="guid-telemetry-1",
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/telemetry.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=3600,
+            ad_segments=[
+                {"start": 0.0, "end": 60.0, "label": "intro"},
+                {"start": 500.0, "end": 620.0, "label": "sponsor"},
+                {"start": 1000.0, "end": 1030.0, "label": "cta"},
+            ],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "audio_duration_sec": 3810.0,
+                        "attempts": [
+                            {"model": "gemini-3.8-flash", "key_masked": "...KEY_ALPHA", "status": 429},
+                            {"model": "gemini-3.8-flash", "key_masked": "...KEY_ALPHA", "status": "success"},
+                            {"model": "gemini-3.8-flash", "key_masked": "...KEY_BETA", "status": "success"},
+                        ],
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 210.0},
+                },
+            },
+        )
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        # Verify API keys telemetry rendered
+        self.assertContains(response, "...KEY_ALPHA")
+        self.assertContains(response, "...KEY_BETA")
+        self.assertContains(response, "2 Keys Active")
+        self.assertContains(response, "Total Audio Analyzed")
+        # Verify listener time saved and segment breakdown rendered
+        self.assertContains(response, "Ad Load")
+        self.assertContains(response, "Total ads & filler removed")
+        self.assertContains(response, "3 segments removed")
+
     def test_pending_episodes_pagination(self):
         """
         Verify that pending episodes are paginated (10 per page by default).
