@@ -471,3 +471,52 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(categorize_segment_label("other"), "ctas")
         self.assertEqual(categorize_segment_label(""), "ads")
         self.assertEqual(categorize_segment_label(None), "ads")
+
+    def test_categorize_segment_label_new_categories(self):
+        """Verify expanded segment labels map to correct categories."""
+        # ads
+        for label in ["network-promo", "cross-promo", "trailer", "merch"]:
+            self.assertEqual(categorize_segment_label(label), "ads")
+        # intros_outros
+        for label in ["recap", "preview", "teaser", "interlude", "silence"]:
+            self.assertEqual(categorize_segment_label(label), "intros_outros")
+        # ctas
+        for label in ["housekeeping", "tour", "live-show", "patreon", "membership"]:
+            self.assertEqual(categorize_segment_label(label), "ctas")
+
+    def test_get_system_metrics_aggregates_expanded_categories(self):
+        """Verify get_system_metrics aggregates counts and percentages for expanded categories."""
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_Expanded_Categories",
+            guid="g_expanded_categories",
+            pub_date="2026-10-15T00:00:00Z",
+            original_audio_url="http://e.com/expanded.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=3600,
+            ad_segments=[
+                {"start": 0.0, "end": 60.0, "label": "recap"},
+                {"start": 600.0, "end": 660.0, "label": "network-promo"},
+                {"start": 1800.0, "end": 1860.0, "label": "housekeeping"},
+                {"start": 3500.0, "end": 3600.0, "label": "outro"},
+            ],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {"status": "success"},
+                    "slicing": {"status": "success", "removed_duration_sec": 280.0},
+                },
+            },
+        )
+
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["total_segments_removed"], 4)
+        self.assertEqual(
+            metrics["segment_types"],
+            {"ads": 1, "intros_outros": 2, "ctas": 1},
+        )
+        self.assertEqual(
+            metrics["segment_percentages"],
+            {"ads": 25.0, "intros_outros": 50.0, "ctas": 25.0},
+        )

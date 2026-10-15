@@ -3,7 +3,7 @@ Services module for computing system metrics, duration formatting, and segment c
 """
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from podcasts.models import Episode
 
 logger = logging.getLogger(__name__)
@@ -60,20 +60,37 @@ def format_hours_decimal(seconds: float) -> str:
     return f"{round(sec / 60.0, 1)}m"
 
 
-def categorize_segment_label(label: Any) -> str:
+def categorize_segment_label(label: Optional[str]) -> str:
     """
     Normalizes segment labels into one of three categories:
-      - intros_outros: 'intro', 'outro', 'music', 'theme'
-      - ctas: 'cta', 'call to action', 'promo', 'promotion', 'off-topic', 'other'
-      - ads: 'sponsor', 'ad', 'advertisement', empty, or any unrecognized category
+      - intros_outros: 'intro', 'outro', 'music', 'theme', 'silence', 'interlude',
+        'recap', 'preview', 'teaser'
+      - ctas: 'cta', 'call to action', 'promo', 'promotion', 'housekeeping', 'tour',
+        'live-show', 'patreon', 'membership', 'off-topic', 'other'
+      - ads: 'sponsor', 'ad', 'advertisement', 'cross-promo', 'network-promo',
+        'trailer', 'merch', empty, or any unrecognized category
     """
     if not label or not isinstance(label, str):
         return "ads"
     norm = label.strip().lower()
-    if any(k in norm for k in ["intro", "outro", "music", "theme"]):
+    intros_outros_keys = [
+        "intro", "outro", "music", "theme", "silence", "interlude", "recap", "preview", "teaser"
+    ]
+    if any(k in norm for k in intros_outros_keys):
         return "intros_outros"
-    if any(k in norm for k in ["cta", "call to action", "promo", "promotion", "off-topic", "other"]):
+    cta_keys = [
+        "cta", "call to action", "promo", "promotion", "housekeeping", "tour",
+        "live-show", "patreon", "membership", "off-topic", "other"
+    ]
+    if any(k in norm for k in cta_keys):
+        if any(k in norm for k in ["network-promo", "cross-promo", "trailer"]):
+            return "ads"
         return "ctas"
+    ad_keys = [
+        "ad", "sponsor", "advertisement", "cross-promo", "network-promo", "trailer", "merch"
+    ]
+    if any(k in norm for k in ad_keys):
+        return "ads"
     return "ads"
 
 
