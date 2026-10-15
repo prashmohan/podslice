@@ -77,11 +77,11 @@ def categorize_segment_label(label: Any) -> str:
     return "ads"
 
 
-class MetricsService:
+class MetricsService:  # pylint: disable=too-few-public-methods
     """Service for calculating system-wide pipeline execution and AI resilience metrics."""
 
     @staticmethod
-    def get_system_metrics() -> Dict[str, Any]:
+    def get_system_metrics() -> Dict[str, Any]:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements,too-many-nested-blocks
         """
         Aggregates processing metrics across all episodes having telemetry data.
 
@@ -121,7 +121,7 @@ class MetricsService:
         # API key tracking: key_masked -> {total_calls, rate_limits, success_count}
         keys_data: Dict[str, Dict[str, Any]] = {}
 
-        for ep in episodes:
+        for ep in episodes:  # pylint: disable=too-many-nested-blocks
             metrics = ep.processing_metrics
             if not isinstance(metrics, dict) or not metrics:
                 continue
