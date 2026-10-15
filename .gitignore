@@ -136,3 +136,6 @@ site/ # if using mkdocs or similar
 *.temp
 *.mp3
 
+# --- Superpowers Brainstorming Session Files ---
+.superpowers/brainstorm/
+
