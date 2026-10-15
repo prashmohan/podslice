@@ -49,16 +49,20 @@ The total duration of the audio is {audio_duration_seconds} seconds.
 
 Identify the precise start and end times for the following categories:
 * **Ads**: Pre-roll, mid-roll, sponsor reads, or promotional content. This includes native, host-read ads that are woven directly into the narrative of the episode without a change in voiceover or musical cue. Pay close attention to spoken content where the hosts transition to describing a sponsor's product, history, or services, even if it is connected to or framed around the episode's main topic (e.g., host-read sponsor segments in podcasts like "Acquired"). Identify the exact segment where the sponsor is being promoted.
-* **Intro/Outro**: Music, jingles, or repetitive legal/branding announcements. Only identify these if there is no active episode content being delivered (do not cut sections where the host is actively introducing the topic over background music).
+* **Network Cross-Promotions & Trailers**: Promotional audio trailers or host plugs for other podcasts or network shows.
+* **Intro & Cold Opens**: Opening theme songs, jingles, or repetitive legal/branding announcements. Only identify these if there is no active episode content being delivered (do not cut sections where the host is actively introducing the topic over background music).
+* **Outro & Sign-Offs**: Spoken host goodbyes ('that wraps it up', 'thanks for listening'), production credits, sound engineering credits, legal notices, network sign-offs, and closing theme music. Crucially: once the core episode discussion or interview concludes, identify the start of the wrap-up and extend this segment's end time all the way to {audio_duration_seconds}.
+* **Housekeeping & CTAs**: Tour dates, live shows, merch drops, subscription/Patreon/Discord pitches, reviews, social media.
+* **Recaps & Previews**: 'Previously on...' recaps of past episodes, or 'Next time on...' teasers for upcoming episodes.
+* **Silence & Instrumental Beds**: Silence >= 3s, or extended non-vocal musical transitions/interludes >= 10s.
 * **Off-Topic**: Tangents or banter completely unrelated to "{episode_title}" or "{podcast_title}". Be conservative here; only identify self-contained tangents that do not transition back into the main topic.
-* **CTAs**: Requests to subscribe, leave reviews, follow social media, or visit sponsor URLs.
-* **Silence**: Continuous silence lasting 3 seconds or longer.
 
 **Guidelines for Precision & Clean Cuts:**
 1. **Identify Native Ads**: Scan the spoken content for transitions into brand promotions or sponsor stories, even if the same hosts continue speaking in the same tone without music cues. Look for brand names, product descriptions, discount codes, or promotional calls to action.
-2. **Natural Pauses**: Align the start and end times with natural pauses in speech or silence. Do not cut in the middle of a word or sentence. Leave a 0.5-second buffer of silence on either end if possible.
-3. **Merge Proximity**: If consecutive non-essential segments are separated by less than 3 seconds of content, merge them into a single continuous segment to prevent fragmented, choppy audio cutting.
-4. **No Hallucinations**: If there are no ads, CTAs, or other non-essential segments in this audio, return an empty array `[]`.
+2. **Complete Outro Removal**: The outro segment must extend all the way to {audio_duration_seconds} unless substantive bonus discussion occurs after. Once the core episode discussion or interview concludes, identify the start of the host wrap-up/sign-off and mark the segment as `outro`, extending its `end` timestamp all the way to {audio_duration_seconds}. Do not leave trailing silence, credits, legal disclaimers, or exit music behind.
+3. **Natural Pauses**: Align the start and end times with natural pauses in speech or silence. Do not cut in the middle of a word or sentence. Leave a 0.5-second buffer of silence on either end if possible.
+4. **Merge Proximity**: If consecutive non-essential segments are separated by less than 3 seconds of content, merge them into a single continuous segment to prevent fragmented, choppy audio cutting.
+5. **No Hallucinations**: If there are no ads, CTAs, or other non-essential segments in this audio, return an empty array `[]`.
 
 **Output Requirements:**
 1. Return ONLY a valid JSON array within a markdown code block (```json ... ```).
@@ -70,8 +74,12 @@ Example Output:
 ```json
 [
   {{"start": 0.0, "end": 45.2, "label": "intro"}},
+  {{"start": 45.2, "end": 95.0, "label": "recap"}},
   {{"start": 605.1, "end": 690.5, "label": "ad"}},
-  {{"start": 1200.0, "end": 1205.0, "label": "silence"}}
+  {{"start": 1200.0, "end": 1215.0, "label": "music"}},
+  {{"start": 1850.0, "end": 1920.0, "label": "network-promo"}},
+  {{"start": 3200.0, "end": 3260.0, "label": "housekeeping"}},
+  {{"start": 3260.0, "end": {audio_duration_seconds}, "label": "outro"}}
 ]
 ```
 """

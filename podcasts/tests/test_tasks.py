@@ -2,7 +2,9 @@
 Tests for the podcast tasks.
 """
 
+import json
 import os
+import re
 import uuid
 from unittest import mock
 
@@ -15,6 +17,7 @@ from django.utils import timezone
 from podcasts.tests.test_base import PodcastTestCase
 from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.tasks import (
+    GEMINI_PROMPT,
     AdManager,
     EpisodeProcessor,
     FeedManager,
@@ -134,6 +137,88 @@ class TasksClassMethodsTest(PodcastTestCase):
         self.assertEqual(segments, [])
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.status, Episode.Status.FAILED)
+
+    def test_gemini_prompt_contains_outro_terminal_and_expanded_categories(self):
+        """
+        Verify GEMINI_PROMPT contains directives for Outro, Network Promos,
+        Housekeeping, Recaps & Previews, Silence & Instrumental Beds,
+        and terminal anchoring to audio_duration_seconds.
+        """
+        self.assertIn("**Outro & Sign-Offs**", GEMINI_PROMPT)
+        self.assertIn("**Network Cross-Promotions & Trailers**", GEMINI_PROMPT)
+        self.assertIn("**Housekeeping & CTAs**", GEMINI_PROMPT)
+        self.assertIn("**Recaps & Previews**", GEMINI_PROMPT)
+        self.assertIn("**Silence & Instrumental Beds**", GEMINI_PROMPT)
+        self.assertIn(
+            "extend this segment's end time all the way to {audio_duration_seconds}",
+            GEMINI_PROMPT,
+        )
+        self.assertIn("Complete Outro Removal", GEMINI_PROMPT)
+        self.assertIn(
+            "The outro segment must extend all the way to {audio_duration_seconds} unless substantive bonus discussion occurs after.",
+            GEMINI_PROMPT,
+        )
+
+    def test_gemini_prompt_formats_cleanly(self):
+        """
+        Verify GEMINI_PROMPT formats cleanly with dynamic duration and metadata,
+        including 1800.0 in the example JSON block.
+        """
+        formatted = GEMINI_PROMPT.format(
+            episode_title="Test",
+            podcast_title="Cast",
+            audio_duration_seconds=1800.0,
+        )
+        self.assertIn("Test", formatted)
+        self.assertIn("Cast", formatted)
+        self.assertIn('"end": 1800.0', formatted)
+        self.assertIn('"label": "outro"', formatted)
+
+        # Ensure example output JSON block is valid JSON
+        match = re.search(r"```json\s*(\[.*?\])\s*```", formatted, re.DOTALL)
+        self.assertIsNotNone(match)
+        example_data = json.loads(match.group(1))
+        self.assertIsInstance(example_data, list)
+        labels = [item["label"] for item in example_data]
+        self.assertIn("intro", labels)
+        self.assertIn("recap", labels)
+        self.assertIn("ad", labels)
+        self.assertIn("music", labels)
+        self.assertIn("network-promo", labels)
+        self.assertIn("housekeeping", labels)
+        self.assertIn("outro", labels)
+        self.assertEqual(example_data[-1]["end"], 1800.0)
+
+    def test_parse_ad_segments_handles_expanded_taxonomy(self):
+        """
+        Verify AdManager._parse_ad_segments parses JSON containing expanded taxonomy labels:
+        outro, network-promo, housekeeping, recap, preview.
+        """
+        raw_json = json.dumps([
+            {"start": 0.0, "end": 45.2, "label": "intro"},
+            {"start": 45.2, "end": 95.0, "label": "recap"},
+            {"start": 605.1, "end": 690.5, "label": "ad"},
+            {"start": 1200.0, "end": 1215.0, "label": "music"},
+            {"start": 1850.0, "end": 1920.0, "label": "network-promo"},
+            {"start": 2500.0, "end": 2530.0, "label": "preview"},
+            {"start": 3200.0, "end": 3260.0, "label": "housekeeping"},
+            {"start": 3260.0, "end": 3600.0, "label": "outro"},
+        ])
+        segments = self.ad_manager._parse_ad_segments(raw_json)  # pylint: disable=protected-access
+        self.assertEqual(len(segments), 8)
+        self.assertEqual(
+            [s["label"] for s in segments],
+            [
+                "intro",
+                "recap",
+                "ad",
+                "music",
+                "network-promo",
+                "preview",
+                "housekeeping",
+                "outro",
+            ],
+        )
 
     @mock.patch(
         "podcasts.tasks.EpisodeProcessor._get_audio_duration", return_value=60.0
