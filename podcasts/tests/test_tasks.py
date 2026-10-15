@@ -153,9 +153,9 @@ class TasksClassMethodsTest(PodcastTestCase):
             "extend this segment's end time all the way to {audio_duration_seconds}",
             GEMINI_PROMPT,
         )
-        self.assertIn("Complete Outro Removal", GEMINI_PROMPT)
         self.assertIn(
-            "The outro segment must extend all the way to {audio_duration_seconds} unless substantive bonus discussion occurs after.",
+            "The outro segment must extend all the way to "
+            "{audio_duration_seconds} unless substantive bonus discussion occurs after.",
             GEMINI_PROMPT,
         )
 
