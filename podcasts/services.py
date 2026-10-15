@@ -134,10 +134,12 @@ class MetricsService:  # pylint: disable=too-few-public-methods
             elif status == Episode.Status.FAILED:
                 unresolved_failures += 1
 
-            stages = metrics.get("stages") or {}
-            download_stage = stages.get("download") or {}
-            gemini_stage = stages.get("gemini") or {}
-            slicing_stage = stages.get("slicing") or {}
+            stages = metrics.get("stages")
+            if not isinstance(stages, dict):
+                stages = {}
+            download_stage = stages.get("download") if isinstance(stages.get("download"), dict) else {}
+            gemini_stage = stages.get("gemini") if isinstance(stages.get("gemini"), dict) else {}
+            slicing_stage = stages.get("slicing") if isinstance(stages.get("slicing"), dict) else {}
 
             # Stage failures count
             download_failed = (
@@ -291,7 +293,10 @@ class MetricsService:  # pylint: disable=too-few-public-methods
                         ep_audio_analyzed = 0.0
                 elif ep.duration_seconds is not None or (status == Episode.Status.COMPLETE and ep_time_saved > 0):
                     completed_savings = ep_time_saved if status == Episode.Status.COMPLETE else 0.0
-                    ep_audio_analyzed = float(ep.duration_seconds or 0.0) + completed_savings
+                    try:
+                        ep_audio_analyzed = float(ep.duration_seconds or 0.0) + completed_savings
+                    except (ValueError, TypeError):
+                        ep_audio_analyzed = completed_savings
             total_audio_analyzed_sec += ep_audio_analyzed
 
             # API Key Distribution tracking
