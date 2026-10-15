@@ -1,13 +1,25 @@
+"""
+Unit tests for MetricsService and duration helper functions.
+"""
+import json
 from django.test import TestCase
 from podcasts.models import Podcast, Episode
-from podcasts.services import MetricsService
+from podcasts.services import (
+    MetricsService,
+    format_duration_hm,
+    format_hours_decimal,
+    categorize_segment_label,
+)
 
 
 class MetricsServiceTest(TestCase):
+    """Test suite for MetricsService aggregation and formatting helpers."""
+
     def setUp(self):
         self.podcast = Podcast.objects.create(title="P", rss_url="http://e.com/rss")
 
     def test_get_system_metrics_empty_database(self):
+        """Verify get_system_metrics returns default zeros when database is empty."""
         metrics = MetricsService.get_system_metrics()
         self.assertEqual(metrics["total_episodes_processed"], 0)
         self.assertEqual(metrics["completed_episodes"], 0)
@@ -25,6 +37,7 @@ class MetricsServiceTest(TestCase):
         )
 
     def test_get_system_metrics_with_telemetry_data(self):
+        """Verify get_system_metrics correctly aggregates metrics across episodes."""
         # Episode 1: Clean run on primary model
         Episode.objects.create(
             podcast=self.podcast,
@@ -125,6 +138,7 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["stage_failures"]["slicing"], 0)
 
     def test_get_system_metrics_gemini_and_slicing_failures(self):
+        """Verify stage failure counters for gemini and slicing errors."""
         # Episode failed at gemini stage
         Episode.objects.create(
             podcast=self.podcast,
@@ -172,6 +186,7 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["clean_runs_pct"], 0.0)
 
     def test_get_system_metrics_ignores_episodes_without_processing_metrics(self):
+        """Verify episodes without processing metrics are ignored by aggregator."""
         # Episode without processing metrics
         Episode.objects.create(
             podcast=self.podcast,
@@ -187,6 +202,7 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["total_episodes_processed"], 0)
 
     def test_get_system_metrics_rate_limit_from_attempts_log(self):
+        """Verify rate limits are detected from gemini attempts telemetry."""
         # Episode where retry was logged in attempts array
         Episode.objects.create(
             podcast=self.podcast,
@@ -220,3 +236,238 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["retries_recovered"], 1)
         self.assertEqual(metrics["retry_recovery_rate_pct"], 100.0)
         self.assertEqual(metrics["clean_runs_count"], 0)  # Had a rate limit retry, not clean
+
+    def test_get_system_metrics_empty_database_includes_new_keys(self):
+        """Verify empty database returns initialized new time saved and api keys telemetry."""
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["total_time_saved_sec"], 0.0)
+        self.assertEqual(metrics["total_time_saved_formatted"], "0m")
+        self.assertEqual(metrics["total_segments_removed"], 0)
+        self.assertEqual(metrics["ad_load_pct"], 0.0)
+        self.assertEqual(metrics["segment_types"], {"ads": 0, "intros_outros": 0, "ctas": 0})
+        self.assertEqual(metrics["segment_percentages"], {"ads": 0.0, "intros_outros": 0.0, "ctas": 0.0})
+        self.assertEqual(metrics["api_keys"], [])
+        self.assertEqual(metrics["active_keys_count"], 0)
+        self.assertEqual(metrics["total_audio_analyzed_sec"], 0.0)
+        self.assertEqual(metrics["total_audio_analyzed_formatted"], "0h")
+        self.assertEqual(metrics["total_audio_rehosted_sec"], 0.0)
+        self.assertEqual(metrics["total_audio_rehosted_formatted"], "0h")
+
+    def test_get_system_metrics_time_saved_and_segments_breakdown(self):
+        """Verify time saved, segment category counters, and ad load percentage."""
+        # Episode 1: Completed with sponsor ad and intro
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_TimeSaved_1",
+            guid="g_ts1",
+            pub_date="2026-10-01T00:00:00Z",
+            original_audio_url="http://e.com/ts1.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=3000,
+            ad_segments=[
+                {"start": 0.0, "end": 30.0, "label": "intro"},
+                {"start": 600.0, "end": 690.0, "label": "sponsor"},
+            ],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {"status": "success"},
+                    "slicing": {"status": "success", "removed_duration_sec": 120.0},
+                },
+            },
+        )
+        # Episode 2: Completed with ad and cta
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_TimeSaved_2",
+            guid="g_ts2",
+            pub_date="2026-10-02T00:00:00Z",
+            original_audio_url="http://e.com/ts2.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1800,
+            ad_segments=[
+                {"start": 500.0, "end": 560.0, "label": "ad"},
+                {"start": 1200.0, "end": 1220.0, "label": "cta"},
+            ],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {"status": "success"},
+                    "slicing": {"status": "success", "removed_duration_sec": 80.0},
+                },
+            },
+        )
+        # Episode 3: Failed episode (must NOT be counted in time saved or removed segments)
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_TimeSaved_Failed",
+            guid="g_ts_fail",
+            pub_date="2026-10-03T00:00:00Z",
+            original_audio_url="http://e.com/tsfail.mp3",
+            status=Episode.Status.FAILED,
+            duration_seconds=None,
+            ad_segments=[
+                {"start": 0.0, "end": 50.0, "label": "sponsor"},
+            ],
+            processing_metrics={
+                "status": "FAILED",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {"status": "failed", "error": "rate limit"},
+                    "slicing": {"status": "pending"},
+                },
+            },
+        )
+
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["total_time_saved_sec"], 200.0)
+        self.assertEqual(metrics["total_time_saved_formatted"], "3m 20s")
+        self.assertEqual(metrics["total_segments_removed"], 4)
+        self.assertEqual(metrics["segment_types"], {"ads": 2, "intros_outros": 1, "ctas": 1})
+        self.assertEqual(metrics["segment_percentages"], {"ads": 50.0, "intros_outros": 25.0, "ctas": 25.0})
+        # ad_load_pct: (200 / (4800 + 200)) * 100 = 4.0%
+        self.assertEqual(metrics["ad_load_pct"], 4.0)
+        self.assertEqual(metrics["total_audio_rehosted_sec"], 4800.0)
+        self.assertEqual(metrics["total_audio_rehosted_formatted"], "1.3h")
+
+    def test_get_system_metrics_handles_json_string_ad_segments(self):
+        """Verify get_system_metrics parses ad_segments when stored as raw JSON string."""
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_JSON_String",
+            guid="g_json_str",
+            pub_date="2026-10-01T00:00:00Z",
+            original_audio_url="http://e.com/json.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=560,
+            ad_segments=json.dumps([{"start": 10.0, "end": 40.0, "label": "promo"}]),
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {"status": "success"},
+                    "slicing": {"status": "success", "removed_duration_sec": 30.0},
+                },
+            },
+        )
+
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["total_segments_removed"], 1)
+        self.assertEqual(metrics["total_time_saved_sec"], 30.0)
+        self.assertEqual(metrics["total_time_saved_formatted"], "30s")
+        self.assertEqual(metrics["segment_types"]["ctas"], 1)
+        self.assertEqual(metrics["segment_percentages"]["ctas"], 100.0)
+        # 30 / (560 + 30) * 100 = 5.0847 -> 5.1%
+        self.assertEqual(metrics["ad_load_pct"], 5.1)
+
+    def test_get_system_metrics_api_key_distribution_and_429s(self):
+        """Verify API key quota distribution, per-key 429 rate limits, and audio analyzed totals."""
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_Keys_1",
+            guid="g_keys_1",
+            pub_date="2026-10-01T00:00:00Z",
+            original_audio_url="http://e.com/k1.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=3600,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "audio_duration_sec": 3900.0,
+                        "attempts": [
+                            {
+                                "model": "gemini-3.8-flash",
+                                "key_masked": "AIzaSy...AAA",
+                                "status": 429,
+                                "error": "ResourceExhausted",
+                            },
+                            {
+                                "model": "gemini-3.8-flash",
+                                "key_masked": "AIzaSy...BBB",
+                                "status": "success",
+                            },
+                        ],
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 300.0},
+                },
+            },
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_Keys_2",
+            guid="g_keys_2",
+            pub_date="2026-10-02T00:00:00Z",
+            original_audio_url="http://e.com/k2.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=7200,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "audio_duration_sec": 7500.0,
+                        "attempts": [
+                            {"model": "gemini-3.8-flash", "key_masked": "AIzaSy...BBB", "status": "success"},
+                            {"model": "gemini-3.8-flash", "key_masked": "AIzaSy...BBB", "status": "success"},
+                        ],
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 300.0},
+                },
+            },
+        )
+
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["active_keys_count"], 2)
+        # Sorted descending by total_calls: BBB (3 calls), AAA (1 call)
+        self.assertEqual(metrics["api_keys"][0]["key_masked"], "AIzaSy...BBB")
+        self.assertEqual(metrics["api_keys"][0]["total_calls"], 3)
+        self.assertEqual(metrics["api_keys"][0]["call_pct"], 75.0)
+        self.assertEqual(metrics["api_keys"][0]["rate_limits"], 0)
+        self.assertEqual(metrics["api_keys"][0]["success_count"], 3)
+
+        self.assertEqual(metrics["api_keys"][1]["key_masked"], "AIzaSy...AAA")
+        self.assertEqual(metrics["api_keys"][1]["total_calls"], 1)
+        self.assertEqual(metrics["api_keys"][1]["call_pct"], 25.0)
+        self.assertEqual(metrics["api_keys"][1]["rate_limits"], 1)
+        self.assertEqual(metrics["api_keys"][1]["success_count"], 0)
+
+        self.assertEqual(metrics["total_audio_analyzed_sec"], 11400.0)
+        self.assertEqual(metrics["total_audio_analyzed_formatted"], "3.2h")
+
+    def test_format_duration_helpers(self):
+        """Verify format_duration_hm, format_hours_decimal, and categorize_segment_label."""
+        self.assertEqual(format_duration_hm(0), "0m")
+        self.assertEqual(format_duration_hm(None), "0m")
+        self.assertEqual(format_duration_hm(-10), "0m")
+        self.assertEqual(format_duration_hm(45), "45s")
+        self.assertEqual(format_duration_hm(1510), "25m 10s")
+        self.assertEqual(format_duration_hm(15480), "4h 18m")
+
+        self.assertEqual(format_hours_decimal(0), "0h")
+        self.assertEqual(format_hours_decimal(None), "0h")
+        self.assertEqual(format_hours_decimal(-5), "0h")
+        self.assertEqual(format_hours_decimal(150), "2.5m")
+        self.assertEqual(format_hours_decimal(116640), "32.4h")
+        self.assertEqual(format_hours_decimal(101160), "28.1h")
+
+        self.assertEqual(categorize_segment_label("sponsor"), "ads")
+        self.assertEqual(categorize_segment_label("ad"), "ads")
+        self.assertEqual(categorize_segment_label("advertisement"), "ads")
+        self.assertEqual(categorize_segment_label("intro"), "intros_outros")
+        self.assertEqual(categorize_segment_label("outro"), "intros_outros")
+        self.assertEqual(categorize_segment_label("theme"), "intros_outros")
+        self.assertEqual(categorize_segment_label("music"), "intros_outros")
+        self.assertEqual(categorize_segment_label("cta"), "ctas")
+        self.assertEqual(categorize_segment_label("call to action"), "ctas")
+        self.assertEqual(categorize_segment_label("promo"), "ctas")
+        self.assertEqual(categorize_segment_label("promotion"), "ctas")
+        self.assertEqual(categorize_segment_label("off-topic"), "ctas")
+        self.assertEqual(categorize_segment_label("other"), "ctas")
+        self.assertEqual(categorize_segment_label(""), "ads")
+        self.assertEqual(categorize_segment_label(None), "ads")
