@@ -65,23 +65,10 @@ Identify the precise start and end times for the following categories:
 5. **No Hallucinations**: If there are no ads, CTAs, or other non-essential segments in this audio, return an empty array `[]`.
 
 **Output Requirements:**
-1. Return ONLY a valid JSON array within a markdown code block (```json ... ```).
-2. Do not include any introductory text, explanation, notes, or concluding text outside of the code block.
+1. Return ONLY a valid JSON array.
+2. Do not include any introductory text, explanation, notes, or concluding text.
 3. Each object must have: "start" (float), "end" (float), and "label" (string).
 4. Timestamps are in seconds from the start of the file.
-
-Example Output:
-```json
-[
-  {{"start": 0.0, "end": 45.2, "label": "intro"}},
-  {{"start": 45.2, "end": 95.0, "label": "recap"}},
-  {{"start": 605.1, "end": 690.5, "label": "ad"}},
-  {{"start": 1200.0, "end": 1215.0, "label": "music"}},
-  {{"start": 1850.0, "end": 1920.0, "label": "network-promo"}},
-  {{"start": 3200.0, "end": 3260.0, "label": "housekeeping"}},
-  {{"start": 3260.0, "end": {audio_duration_seconds}, "label": "outro"}}
-]
-```
 """
 
 
@@ -90,7 +77,13 @@ class AdSegmentSchema(BaseModel):  # pylint: disable=too-few-public-methods
 
     start: float = Field(..., description="Start timestamp of the segment in seconds.")
     end: float = Field(..., description="End timestamp of the segment in seconds.")
-    label: str = Field(..., description="Classification label for the segment.")
+    label: str = Field(
+        ...,
+        description=(
+            "Classification category label for the segment (e.g., ad, intro, outro, "
+            "network-promo, housekeeping, recap, preview, music, off-topic)."
+        ),
+    )
 
 
 class AdManager:

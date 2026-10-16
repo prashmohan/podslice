@@ -5,7 +5,6 @@ Tests for the podcast tasks.
 
 import json
 import os
-import re
 import uuid
 from unittest import mock
 
@@ -163,7 +162,7 @@ class TasksClassMethodsTest(PodcastTestCase):
     def test_gemini_prompt_formats_cleanly(self):
         """
         Verify GEMINI_PROMPT formats cleanly with dynamic duration and metadata,
-        including 1800.0 in the example JSON block.
+        without duplicate markdown JSON code blocks.
         """
         formatted = GEMINI_PROMPT.format(
             episode_title="Test",
@@ -172,23 +171,17 @@ class TasksClassMethodsTest(PodcastTestCase):
         )
         self.assertIn("Test", formatted)
         self.assertIn("Cast", formatted)
-        self.assertIn('"end": 1800.0', formatted)
-        self.assertIn('"label": "outro"', formatted)
-
-        # Ensure example output JSON block is valid JSON
-        match = re.search(r"```json\s*(\[.*?\])\s*```", formatted, re.DOTALL)
-        self.assertIsNotNone(match)
-        example_data = json.loads(match.group(1))
-        self.assertIsInstance(example_data, list)
-        labels = [item["label"] for item in example_data]
-        self.assertIn("intro", labels)
-        self.assertIn("recap", labels)
-        self.assertIn("ad", labels)
-        self.assertIn("music", labels)
-        self.assertIn("network-promo", labels)
-        self.assertIn("housekeeping", labels)
-        self.assertIn("outro", labels)
-        self.assertEqual(example_data[-1]["end"], 1800.0)
+        self.assertIn("1800.0", formatted)
+        self.assertNotIn("```json", formatted)
+        self.assertIn(
+            "extend this segment's end time all the way to 1800.0",
+            formatted,
+        )
+        self.assertIn(
+            "The outro segment must extend all the way to "
+            "1800.0 unless substantive bonus discussion occurs after.",
+            formatted,
+        )
 
     def test_parse_ad_segments_handles_expanded_taxonomy(self):
         """
