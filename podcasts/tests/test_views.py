@@ -1305,6 +1305,119 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "pending-episodes-panel")
 
+    def test_episodes_template_dropdown_options(self):
+        """
+        Verify the status select dropdown renders:
+        - "All Pending Statuses" with value=""
+        - "All Statuses" with value="all"
+        - Individual choices including Complete and Failed
+        - Appropriate selected attributes when filtered.
+        """
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<option value="">All Pending Statuses</option>')
+        self.assertContains(response, '<option value="all">All Statuses</option>')
+        self.assertContains(response, '<option value="COMPLETE">Complete</option>')
+        self.assertContains(response, '<option value="FAILED">Failed</option>')
+
+        # When status=all is selected
+        res_all = self.client.get(reverse("podcast-subscribe-ui") + "?status=all")
+        self.assertEqual(res_all.status_code, 200)
+        self.assertContains(res_all, '<option value="all" selected>All Statuses</option>')
+
+        # When status=COMPLETE is selected
+        res_comp = self.client.get(reverse("podcast-subscribe-ui") + "?status=COMPLETE")
+        self.assertEqual(res_comp.status_code, 200)
+        self.assertContains(res_comp, '<option value="COMPLETE" selected>Complete</option>')
+
+    def test_episodes_template_complete_and_failed_badges(self):
+        """
+        Verify COMPLETE episodes render <span class="badge bg-success">Complete</span>
+        and FAILED episodes render <span class="badge bg-danger">Failed</span>.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Complete Badge Ep",
+            guid="guid-comp-badge",
+            original_audio_url="http://example.com/comp.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Failed Badge Ep",
+            guid="guid-failed-badge",
+            original_audio_url="http://example.com/fail.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.FAILED,
+        )
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?status=all")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '<span class="badge bg-success">Complete</span>')
+        self.assertContains(response, '<span class="badge bg-danger">Failed</span>')
+
+    def test_episodes_panel_visible_when_completed_episodes_exist(self):
+        """
+        Verify that when there are completed episodes but 0 pending episodes,
+        the episodes panel is still visible (allowing user to switch filter to All/Complete)
+        and card title is 'Episodes'.
+        """
+        Episode.objects.all().delete()
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Only Complete Ep",
+            guid="guid-only-comp",
+            original_audio_url="http://example.com/comp.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="pending-episodes-panel"')
+        self.assertContains(response, '<h3 class="card-title mb-0">Episodes</h3>')
+
+    def test_episodes_empty_state_guidance(self):
+        """
+        Verify empty state guides users to switch filter if other episodes exist in the system.
+        """
+        Episode.objects.all().delete()
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Existing Complete Ep",
+            guid="guid-exist-comp",
+            original_audio_url="http://example.com/comp.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+        # 0 pending episodes, default filter is pending
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No pending episodes match the selected filter criteria.")
+        self.assertContains(
+            response,
+            "Switch the status filter to <strong>All Statuses</strong> or <strong>Complete</strong> to view processed episodes.",
+        )
+
+        # When searching with a specific status and 0 match, generic empty message
+        res_filtered = self.client.get(reverse("podcast-subscribe-ui") + "?status=COMPLETE&q=NonExistent")
+        self.assertEqual(res_filtered.status_code, 200)
+        self.assertContains(res_filtered, "No episodes match the selected filter criteria.")
+        self.assertNotContains(res_filtered, "Switch the status filter")
+
+    def test_episodes_canonical_querystring_in_sort_and_pagination(self):
+        """
+        Verify sort and pagination URLs preserve canonical status filter (or remove it when default/empty).
+        """
+        res_empty = self.client.get(reverse("podcast-subscribe-ui") + "?status=")
+        self.assertEqual(res_empty.status_code, 200)
+        self.assertNotIn("status=", res_empty.context["querystring"])
+
+        res_active = self.client.get(reverse("podcast-subscribe-ui") + "?status=complete")
+        self.assertEqual(res_active.status_code, 200)
+        self.assertIn("status=COMPLETE", res_active.context["querystring"])
+        self.assertIn("status=COMPLETE", res_active.context["sort_urls"]["title"]["url"])
+
+
 
 class PodcastStatusUIViewTest(PodcastTestCase):
     """

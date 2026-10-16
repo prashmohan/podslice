@@ -358,6 +358,10 @@ class PodcastSubscribeUIView(View):
         query_params = request.GET.copy() if request.method == "GET" else {}
         if "page" in query_params:
             del query_params["page"]
+        if status_filter:
+            query_params["status"] = status_filter
+        elif "status" in query_params:
+            del query_params["status"]
         if time_window == "all":
             if "time_window" in query_params:
                 del query_params["time_window"]
