@@ -1006,6 +1006,170 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertEqual(len(episodes), 1)
         self.assertEqual(episodes[0].title, "Downloading Episode")
 
+    def test_episodes_filter_default_shows_pending_statuses(self):
+        """
+        When no status is provided, only pending episodes are included;
+        complete and failed episodes are excluded.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Downloading Ep",
+            guid="guid-dl-default",
+            original_audio_url="http://example.com/dl.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.DOWNLOADING,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Complete Ep",
+            guid="guid-complete-default",
+            original_audio_url="http://example.com/complete.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Failed Ep",
+            guid="guid-failed-default",
+            original_audio_url="http://example.com/failed.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.FAILED,
+        )
+
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_status"], "")
+        self.assertIn("all_statuses", response.context)
+        self.assertIn("total_episodes_count", response.context)
+        self.assertEqual(response.context["total_episodes_count"], 4)
+        self.assertEqual(response.context["total_pending_count"], 2)
+        episodes = list(response.context["pending_episodes"])
+        titles = [e.title for e in episodes]
+        self.assertIn("Test Episode", titles)
+        self.assertIn("Downloading Ep", titles)
+        self.assertNotIn("Complete Ep", titles)
+        self.assertNotIn("Failed Ep", titles)
+        self.assertIn("episodes", response.context)
+        self.assertEqual(list(response.context["episodes"]), episodes)
+
+    def test_episodes_filter_all_statuses(self):
+        """
+        When ?status=all is passed, episodes with status NEW, DOWNLOADING, COMPLETE,
+        and FAILED are all returned in the page.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Downloading Ep",
+            guid="guid-dl-all",
+            original_audio_url="http://example.com/dl.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.DOWNLOADING,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Complete Ep",
+            guid="guid-complete-all",
+            original_audio_url="http://example.com/complete.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Failed Ep",
+            guid="guid-failed-all",
+            original_audio_url="http://example.com/failed.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.FAILED,
+        )
+
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?status=all")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_status"], "all")
+        episodes = list(response.context["pending_episodes"])
+        self.assertEqual(len(episodes), 4)
+        statuses = {e.status for e in episodes}
+        self.assertEqual(
+            statuses,
+            {Episode.Status.NEW, Episode.Status.DOWNLOADING, Episode.Status.COMPLETE, Episode.Status.FAILED},
+        )
+        self.assertEqual(list(response.context["episodes"]), episodes)
+
+    def test_episodes_filter_complete_status(self):
+        """
+        When ?status=COMPLETE is passed, only COMPLETE episodes are returned.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Downloading Ep",
+            guid="guid-dl-comp",
+            original_audio_url="http://example.com/dl.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.DOWNLOADING,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Complete Ep",
+            guid="guid-complete-comp",
+            original_audio_url="http://example.com/complete.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Failed Ep",
+            guid="guid-failed-comp",
+            original_audio_url="http://example.com/failed.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.FAILED,
+        )
+
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?status=COMPLETE")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_status"], "COMPLETE")
+        episodes = list(response.context["pending_episodes"])
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0].title, "Complete Ep")
+        self.assertEqual(episodes[0].status, Episode.Status.COMPLETE)
+        self.assertEqual(list(response.context["episodes"]), episodes)
+
+    def test_episodes_filter_failed_status(self):
+        """
+        When ?status=FAILED is passed, only FAILED episodes are returned.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Downloading Ep",
+            guid="guid-dl-fail",
+            original_audio_url="http://example.com/dl.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.DOWNLOADING,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Complete Ep",
+            guid="guid-complete-fail",
+            original_audio_url="http://example.com/complete.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Failed Ep",
+            guid="guid-failed-fail",
+            original_audio_url="http://example.com/failed.mp3",
+            pub_date=timezone.now(),
+            status=Episode.Status.FAILED,
+        )
+
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?status=FAILED")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["selected_status"], "FAILED")
+        episodes = list(response.context["pending_episodes"])
+        self.assertEqual(len(episodes), 1)
+        self.assertEqual(episodes[0].title, "Failed Ep")
+        self.assertEqual(episodes[0].status, Episode.Status.FAILED)
+        self.assertEqual(list(response.context["episodes"]), episodes)
+
     def test_pending_episodes_filter_by_podcast(self):
         """
         Verify filtering pending episodes by podcast ID.

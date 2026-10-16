@@ -291,6 +291,8 @@ class PodcastSubscribeUIView(View):
         Episode.Status.PROCESSING,
     ]
 
+    ALL_STATUSES = [(s.value, s.label) for s in Episode.Status]
+
     SORT_FIELDS = {
         "podcast": "podcast__title",
         "title": "title",
@@ -304,21 +306,27 @@ class PodcastSubscribeUIView(View):
         podcasts = Podcast.objects.all().order_by('title')
         last_polled_time = Podcast.objects.exclude(last_polled=None).order_by('-last_polled').first()
 
-        pending_episodes_qs = Episode.objects.filter(
-            status__in=self.PENDING_STATUSES
-        ).select_related('podcast')
+        episodes_qs = Episode.objects.select_related('podcast')
 
         status_filter = request.GET.get("status", "").strip() if request.method == "GET" else ""
-        if status_filter in [s.value for s in self.PENDING_STATUSES]:
-            pending_episodes_qs = pending_episodes_qs.filter(status=status_filter)
+        if status_filter.lower() == "all":
+            status_filter = "all"
+        elif status_filter in Episode.Status.values:
+            episodes_qs = episodes_qs.filter(status=status_filter)
+        elif status_filter.upper() in Episode.Status.values:
+            status_filter = status_filter.upper()
+            episodes_qs = episodes_qs.filter(status=status_filter)
+        else:
+            episodes_qs = episodes_qs.filter(status__in=self.PENDING_STATUSES)
+            status_filter = ""
 
         podcast_id_filter = request.GET.get("podcast_id", "").strip() if request.method == "GET" else ""
         if podcast_id_filter:
-            pending_episodes_qs = pending_episodes_qs.filter(podcast_id=podcast_id_filter)
+            episodes_qs = episodes_qs.filter(podcast_id=podcast_id_filter)
 
         search_query = request.GET.get("q", "").strip() if request.method == "GET" else ""
         if search_query:
-            pending_episodes_qs = pending_episodes_qs.filter(title__icontains=search_query)
+            episodes_qs = episodes_qs.filter(title__icontains=search_query)
 
         sort_by = request.GET.get("sort", "pub_date").strip() if request.method == "GET" else "pub_date"
         if sort_by not in self.SORT_FIELDS:
@@ -332,9 +340,9 @@ class PodcastSubscribeUIView(View):
         if order == "desc":
             sort_field = f"-{sort_field}"
 
-        pending_episodes_qs = pending_episodes_qs.order_by(sort_field)
+        episodes_qs = episodes_qs.order_by(sort_field)
 
-        paginator = Paginator(pending_episodes_qs, self.PAGE_SIZE)
+        paginator = Paginator(episodes_qs, self.PAGE_SIZE)
         page_number = request.GET.get("page") if request.method == "GET" else 1
         try:
             pending_page = paginator.page(page_number)
@@ -381,22 +389,19 @@ class PodcastSubscribeUIView(View):
                 "direction": order if sort_by == col else None,
             }
 
+        total_episodes_count = Episode.objects.count()
         total_pending_count = Episode.objects.filter(status__in=self.PENDING_STATUSES).count()
 
         context = {
             'podcasts': podcasts,
             'last_polled_time': last_polled_time.last_polled if last_polled_time else None,
             'pending_episodes': pending_page,
+            'episodes': pending_page,
             'metrics': MetricsService.get_system_metrics(time_window=time_window),
             'time_window': time_window,
             'time_window_urls': time_window_urls,
-            'pending_statuses': [
-                (Episode.Status.NEW, "New"),
-                (Episode.Status.QUEUED, "Queued"),
-                (Episode.Status.DOWNLOADING, "Downloading"),
-                (Episode.Status.ANALYZING, "Analyzing"),
-                (Episode.Status.PROCESSING, "Processing"),
-            ],
+            'all_statuses': self.ALL_STATUSES,
+            'pending_statuses': [(s.value, s.label) for s in self.PENDING_STATUSES],
             'selected_status': status_filter,
             'selected_podcast': podcast_id_filter,
             'search_query': search_query,
@@ -404,6 +409,7 @@ class PodcastSubscribeUIView(View):
             'sort_order': order,
             'sort_urls': sort_urls,
             'querystring': querystring,
+            'total_episodes_count': total_episodes_count,
             'total_pending_count': total_pending_count,
         }
         if extra_context:
