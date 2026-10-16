@@ -671,7 +671,7 @@ class PodcastRSSFeedView(generics.RetrieveAPIView):
         }
         rss_feed = render_to_string("podcasts/rss_feed_template.xml", context)
         response = HttpResponse(rss_feed, content_type="application/xml")
-        
+
         if last_modified_str:
             response["Last-Modified"] = last_modified_str
         response["ETag"] = etag
