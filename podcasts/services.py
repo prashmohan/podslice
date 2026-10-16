@@ -3,7 +3,8 @@ Services module for computing system metrics, duration formatting, and segment c
 """
 import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from django.conf import settings
 from podcasts.models import Episode
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,26 @@ def categorize_segment_label(label: Optional[str]) -> str:
         return "ctas"
 
     return "ads"
+
+
+def mask_api_key(key: Optional[str]) -> str:
+    """
+    Mask an API key for safe display in telemetry and metrics.
+    Preserves existing masked format (containing '...') or formats
+    unmasked keys as prefix...suffix (or prefix... if short).
+    """
+    if not key:
+        return ""
+    key_str = str(key).strip()
+    if not key_str:
+        return ""
+    if "..." in key_str:
+        return key_str
+    if len(key_str) <= 6:
+        return key_str
+    if len(key_str) <= 10:
+        return f"{key_str[:6]}..."
+    return f"{key_str[:6]}...{key_str[-4:]}"
 
 
 class MetricsService:  # pylint: disable=too-few-public-methods
@@ -380,22 +401,64 @@ class MetricsService:  # pylint: disable=too-few-public-methods
         else:
             ad_load_pct = 0.0
 
+        # Cross-reference configured Gemini API keys
+        configured_keys_raw = getattr(settings, "GEMINI_API_KEYS", None)
+        if isinstance(configured_keys_raw, str):
+            configured_keys_raw = [
+                k.strip().strip("'\"")
+                for k in configured_keys_raw.split(",")
+                if k.strip().strip("'\"")
+            ]
+        elif not configured_keys_raw:
+            single_key = getattr(settings, "GEMINI_API_KEY", None)
+            configured_keys_raw = [single_key] if single_key else []
+
+        configured_keys: List[str] = []
+        if configured_keys_raw and isinstance(configured_keys_raw, (list, tuple)):
+            for k in configured_keys_raw:
+                masked = mask_api_key(k)
+                if masked and masked not in configured_keys:
+                    configured_keys.append(masked)
+
         total_key_calls = sum(k["total_calls"] for k in keys_data.values())
-        api_keys_list = []
+
+        # Active keys from telemetry (total_calls > 0) sorted descending by total_calls
+        active_keys_list = []
         for key_info in sorted(keys_data.values(), key=lambda x: (-x["total_calls"], x["key_masked"])):
             call_pct = (
                 round((key_info["total_calls"] / total_key_calls) * 100.0, 1)
                 if total_key_calls > 0
                 else 0.0
             )
-            api_keys_list.append({
+            active_keys_list.append({
                 "key_masked": key_info["key_masked"],
                 "total_calls": key_info["total_calls"],
                 "call_pct": call_pct,
                 "rate_limits": key_info["rate_limits"],
                 "success_count": key_info["success_count"],
+                "is_active": True,
             })
-        active_keys_count = len(api_keys_list)
+
+        # Standby keys: configured keys that have not recorded any calls
+        standby_keys_list = []
+        for conf_key in configured_keys:
+            if conf_key not in keys_data:
+                standby_keys_list.append({
+                    "key_masked": conf_key,
+                    "total_calls": 0,
+                    "call_pct": 0.0,
+                    "rate_limits": 0,
+                    "success_count": 0,
+                    "is_active": False,
+                })
+
+        api_keys_list = active_keys_list + standby_keys_list
+        active_keys_count = len(active_keys_list)
+        configured_keys_count = (
+            max(len(configured_keys), len(api_keys_list))
+            if configured_keys
+            else len(api_keys_list)
+        )
 
         return {
             "total_episodes_processed": total_episodes_processed,
@@ -417,6 +480,7 @@ class MetricsService:  # pylint: disable=too-few-public-methods
             "segment_percentages": segment_percentages,
             "api_keys": api_keys_list,
             "active_keys_count": active_keys_count,
+            "configured_keys_count": configured_keys_count,
             "total_audio_analyzed_sec": total_audio_analyzed_sec,
             "total_audio_analyzed_formatted": total_audio_analyzed_formatted,
             "total_audio_rehosted_sec": total_audio_rehosted_sec,

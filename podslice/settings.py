@@ -190,11 +190,16 @@ if not REHOST_BASE_URL:
     raise ImproperlyConfigured("REHOST_BASE_URL environment variable not set.")
 
 # Gemini API Key configuration
-_raw_gemini_keys = os.environ.get("GEMINI_API_KEYS", "").strip()
+_raw_gemini_keys = os.environ.get("GEMINI_API_KEYS", "").strip().strip("'\"")
 if _raw_gemini_keys:
-    GEMINI_API_KEYS = [k.strip() for k in _raw_gemini_keys.split(",") if k.strip()]
+    GEMINI_API_KEYS = [
+        k.strip().strip("'\"")
+        for k in _raw_gemini_keys.split(",")
+        if k.strip().strip("'\"")
+    ]
 elif os.environ.get("GEMINI_API_KEY"):
-    GEMINI_API_KEYS = [os.environ.get("GEMINI_API_KEY").strip()]
+    _single_gemini_key = os.environ.get("GEMINI_API_KEY", "").strip().strip("'\"")
+    GEMINI_API_KEYS = [_single_gemini_key] if _single_gemini_key else []
 else:
     GEMINI_API_KEYS = []
 

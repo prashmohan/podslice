@@ -2,13 +2,14 @@
 Unit tests for MetricsService and duration helper functions.
 """
 import json
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from podcasts.models import Podcast, Episode
 from podcasts.services import (
     MetricsService,
     format_duration_hm,
     format_hours_decimal,
     categorize_segment_label,
+    mask_api_key,
 )
 
 
@@ -237,6 +238,7 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["retry_recovery_rate_pct"], 100.0)
         self.assertEqual(metrics["clean_runs_count"], 0)  # Had a rate limit retry, not clean
 
+    @override_settings(GEMINI_API_KEYS=[], GEMINI_API_KEY="")
     def test_get_system_metrics_empty_database_includes_new_keys(self):
         """Verify empty database returns initialized new time saved and api keys telemetry."""
         metrics = MetricsService.get_system_metrics()
@@ -248,6 +250,7 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["segment_percentages"], {"ads": 0.0, "intros_outros": 0.0, "ctas": 0.0})
         self.assertEqual(metrics["api_keys"], [])
         self.assertEqual(metrics["active_keys_count"], 0)
+        self.assertEqual(metrics["configured_keys_count"], 0)
         self.assertEqual(metrics["total_audio_analyzed_sec"], 0.0)
         self.assertEqual(metrics["total_audio_analyzed_formatted"], "0h")
         self.assertEqual(metrics["total_audio_rehosted_sec"], 0.0)
@@ -522,3 +525,136 @@ class MetricsServiceTest(TestCase):
             metrics["segment_percentages"],
             {"ads": 25.0, "intros_outros": 50.0, "ctas": 25.0},
         )
+
+    def test_mask_api_key_helper(self):
+        """Verify mask_api_key handles None, empty, already masked, short, and long keys."""
+        self.assertEqual(mask_api_key(None), "")
+        self.assertEqual(mask_api_key(""), "")
+        self.assertEqual(mask_api_key("   "), "")
+        self.assertEqual(mask_api_key("key1"), "key1")
+        self.assertEqual(mask_api_key("abcdef"), "abcdef")
+        self.assertEqual(mask_api_key("abcdefg"), "abcdef...")
+        self.assertEqual(mask_api_key("1234567890"), "123456...")
+        self.assertEqual(
+            mask_api_key("AIzaSyBmFRaUdx8RodHMc4D03DYlsImXapS93Ds"),
+            "AIzaSy...93Ds",
+        )
+        self.assertEqual(mask_api_key("AIzaSy...AAA"), "AIzaSy...AAA")
+        self.assertEqual(mask_api_key("...KEY_ALPHA"), "...KEY_ALPHA")
+
+    @override_settings(GEMINI_API_KEYS=["key1", "key2", "key3"], GEMINI_API_KEY="")
+    def test_get_system_metrics_with_configured_standby_keys(self):
+        """Verify configured keys appear as standby keys with 0 calls when no telemetry exists."""
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["configured_keys_count"], 3)
+        self.assertEqual(metrics["active_keys_count"], 0)
+        self.assertEqual(len(metrics["api_keys"]), 3)
+        self.assertEqual(
+            [k["key_masked"] for k in metrics["api_keys"]],
+            ["key1", "key2", "key3"],
+        )
+        for key_info in metrics["api_keys"]:
+            self.assertEqual(key_info["total_calls"], 0)
+            self.assertEqual(key_info["call_pct"], 0.0)
+            self.assertEqual(key_info["rate_limits"], 0)
+            self.assertEqual(key_info["success_count"], 0)
+            self.assertFalse(key_info["is_active"])
+
+    @override_settings(GEMINI_API_KEYS=["key1", "key2", "key3"], GEMINI_API_KEY="")
+    def test_get_system_metrics_active_and_standby_keys_sorting(self):
+        """Verify active keys sort first by total calls, followed by standby keys in config order."""
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_Active_Key1",
+            guid="g_act_k1",
+            pub_date="2026-10-16T00:00:00Z",
+            original_audio_url="http://e.com/act1.mp3",
+            status=Episode.Status.COMPLETE,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [
+                            {"model": "gemini-3.8-flash", "key_masked": "key1", "status": "success"},
+                            {"model": "gemini-3.8-flash", "key_masked": "key1", "status": "success"},
+                        ],
+                    },
+                    "slicing": {"status": "success"},
+                },
+            },
+        )
+
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["configured_keys_count"], 3)
+        self.assertEqual(metrics["active_keys_count"], 1)
+        self.assertEqual(len(metrics["api_keys"]), 3)
+
+        # Active key first
+        self.assertEqual(metrics["api_keys"][0]["key_masked"], "key1")
+        self.assertTrue(metrics["api_keys"][0]["is_active"])
+        self.assertEqual(metrics["api_keys"][0]["total_calls"], 2)
+        self.assertEqual(metrics["api_keys"][0]["call_pct"], 100.0)
+        self.assertEqual(metrics["api_keys"][0]["success_count"], 2)
+
+        # Standby keys next in configured order
+        self.assertEqual(metrics["api_keys"][1]["key_masked"], "key2")
+        self.assertFalse(metrics["api_keys"][1]["is_active"])
+        self.assertEqual(metrics["api_keys"][1]["total_calls"], 0)
+        self.assertEqual(metrics["api_keys"][1]["call_pct"], 0.0)
+
+        self.assertEqual(metrics["api_keys"][2]["key_masked"], "key3")
+        self.assertFalse(metrics["api_keys"][2]["is_active"])
+        self.assertEqual(metrics["api_keys"][2]["total_calls"], 0)
+        self.assertEqual(metrics["api_keys"][2]["call_pct"], 0.0)
+
+    @override_settings(GEMINI_API_KEYS=[], GEMINI_API_KEY="legacy-single-key")
+    def test_get_system_metrics_fallback_to_single_gemini_api_key(self):
+        """Verify fallback to GEMINI_API_KEY when GEMINI_API_KEYS is empty."""
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["configured_keys_count"], 1)
+        self.assertEqual(metrics["active_keys_count"], 0)
+        self.assertEqual(len(metrics["api_keys"]), 1)
+        self.assertEqual(metrics["api_keys"][0]["key_masked"], "legacy...-key")
+        self.assertFalse(metrics["api_keys"][0]["is_active"])
+
+    @override_settings(GEMINI_API_KEYS=[], GEMINI_API_KEY="")
+    def test_get_system_metrics_unconfigured_active_keys_fallback(self):
+        """Verify unconfigured historical keys are active and configured_keys_count falls back."""
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="E_Historical",
+            guid="g_hist",
+            pub_date="2026-10-16T00:00:00Z",
+            original_audio_url="http://e.com/hist.mp3",
+            status=Episode.Status.COMPLETE,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [
+                            {"model": "gemini-3.8-flash", "key_masked": "historical-key", "status": "success"},
+                        ],
+                    },
+                    "slicing": {"status": "success"},
+                },
+            },
+        )
+
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["active_keys_count"], 1)
+        self.assertEqual(metrics["configured_keys_count"], 1)
+        self.assertEqual(len(metrics["api_keys"]), 1)
+        self.assertEqual(metrics["api_keys"][0]["key_masked"], "historical-key")
+        self.assertTrue(metrics["api_keys"][0]["is_active"])
+
+    @override_settings(GEMINI_API_KEYS=["key1", "key1", "key2"], GEMINI_API_KEY="")
+    def test_get_system_metrics_duplicate_configured_keys_deduplicated(self):
+        """Verify duplicate configured keys in settings are deduplicated."""
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["configured_keys_count"], 2)
+        self.assertEqual(len(metrics["api_keys"]), 2)
+        self.assertEqual([k["key_masked"] for k in metrics["api_keys"]], ["key1", "key2"])
