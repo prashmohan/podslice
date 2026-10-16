@@ -491,6 +491,101 @@ class AdditionalPodcastViewsTest(PodcastTestCase):
         self.assertEqual(data["completed"], 1)
         self.assertEqual(data["pending"], 0)
 
+    def test_episode_status_api_supports_time_window(self):
+        """
+        Verify EpisodeStatusAPIView returns completed count filtered by time_window.
+        """
+        now = timezone.now()
+        # Ep 1: completed 2 hours ago (within 1d, 1w, 1m)
+        _ep1 = Episode.objects.create(
+            podcast=self.podcast,
+            title="Ep 1d",
+            guid="guid-1d",
+            pub_date=now - timezone.timedelta(hours=2),
+            original_audio_url="http://example.com/ep1.mp3",
+            status=Episode.Status.COMPLETE,
+        )
+        # Ep 2: completed 3 days ago (within 1w, 1m; outside 1d)
+        ep2 = Episode.objects.create(
+            podcast=self.podcast,
+            title="Ep 1w",
+            guid="guid-1w",
+            pub_date=now - timezone.timedelta(days=3),
+            original_audio_url="http://example.com/ep2.mp3",
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.filter(id=ep2.id).update(
+            created_at=now - timezone.timedelta(days=3),
+            updated_at=now - timezone.timedelta(days=3),
+        )
+        # Ep 3: completed 15 days ago (within 1m; outside 1d, 1w)
+        ep3 = Episode.objects.create(
+            podcast=self.podcast,
+            title="Ep 1m",
+            guid="guid-1m",
+            pub_date=now - timezone.timedelta(days=15),
+            original_audio_url="http://example.com/ep3.mp3",
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.filter(id=ep3.id).update(
+            created_at=now - timezone.timedelta(days=15),
+            updated_at=now - timezone.timedelta(days=15),
+        )
+        # Ep 4: completed 45 days ago (outside 1m)
+        ep4 = Episode.objects.create(
+            podcast=self.podcast,
+            title="Ep Old",
+            guid="guid-old",
+            pub_date=now - timezone.timedelta(days=45),
+            original_audio_url="http://example.com/ep4.mp3",
+            status=Episode.Status.COMPLETE,
+        )
+        Episode.objects.filter(id=ep4.id).update(
+            created_at=now - timezone.timedelta(days=45),
+            updated_at=now - timezone.timedelta(days=45),
+        )
+
+        # Note: self.episode is NEW (pending) from setUp
+
+        url = reverse("episode-status-api")
+
+        # 1d window: only ep1
+        resp_1d = self.client.get(url + "?time_window=1d")
+        self.assertEqual(resp_1d.status_code, 200)
+        self.assertEqual(resp_1d.json()["completed"], 1)
+        self.assertEqual(resp_1d.json()["pending"], 1)
+
+        # 1w window: ep1, ep2
+        resp_1w = self.client.get(url + "?time_window=1w")
+        self.assertEqual(resp_1w.status_code, 200)
+        self.assertEqual(resp_1w.json()["completed"], 2)
+        self.assertEqual(resp_1w.json()["pending"], 1)
+
+        # 1m window: ep1, ep2, ep3
+        resp_1m = self.client.get(url + "?time_window=1m")
+        self.assertEqual(resp_1m.status_code, 200)
+        self.assertEqual(resp_1m.json()["completed"], 3)
+        self.assertEqual(resp_1m.json()["pending"], 1)
+
+        # all window: ep1, ep2, ep3, ep4
+        resp_all = self.client.get(url + "?time_window=all")
+        self.assertEqual(resp_all.status_code, 200)
+        self.assertEqual(resp_all.json()["completed"], 4)
+        self.assertEqual(resp_all.json()["pending"], 1)
+
+        # default (no param): ep1, ep2, ep3, ep4
+        resp_default = self.client.get(url)
+        self.assertEqual(resp_default.status_code, 200)
+        self.assertEqual(resp_default.json()["completed"], 4)
+        self.assertEqual(resp_default.json()["pending"], 1)
+
+        # invalid param falls back to all
+        resp_invalid = self.client.get(url + "?time_window=invalid_val")
+        self.assertEqual(resp_invalid.status_code, 200)
+        self.assertEqual(resp_invalid.json()["completed"], 4)
+        self.assertEqual(resp_invalid.json()["pending"], 1)
+
+
     @mock.patch("podcasts.views.threading.Thread")
     def test_serve_rehosted_media_stuck_reset(self, mock_thread_class):
         """
@@ -666,6 +761,175 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertContains(response, '<span class="badge bg-secondary text-white">Standby</span>')
         self.assertContains(response, "0 calls (Standby)")
 
+    def test_subscribe_ui_renders_time_window_filter(self):
+        """
+        Verify that the main UI page renders filter buttons for 'All Time', 'Last 1d',
+        'Last 1w', and 'Last 1m' with correct links and active state.
+        """
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("time_window", response.context)
+        self.assertIn("time_window_urls", response.context)
+        self.assertEqual(response.context["time_window"], "all")
+
+        # Check button group header and buttons
+        self.assertContains(response, "Service Metrics")
+        self.assertContains(response, 'aria-label="Metrics Time Window Filter"')
+        self.assertContains(response, "All Time")
+        self.assertContains(response, "Last 1d")
+        self.assertContains(response, "Last 1w")
+        self.assertContains(response, "Last 1m")
+
+        # Active state: "All Time" should be active, others outline-secondary
+        self.assertContains(
+            response,
+            '<a href="?" class="btn btn-primary active fw-semibold">All Time</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="?time_window=1d" class="btn btn-outline-secondary">Last 1d</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="?time_window=1w" class="btn btn-outline-secondary">Last 1w</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="?time_window=1m" class="btn btn-outline-secondary">Last 1m</a>',
+            html=True,
+        )
+
+    def test_subscribe_ui_filters_metrics_by_time_window(self):
+        """
+        Verify GET with ?time_window=1d passes '1d' to MetricsService and marks
+        'Last 1d' button active, and that invalid time_window falls back to 'all'.
+        """
+        now = timezone.now()
+        # Episode 1: within 1d
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Recent Complete Episode",
+            guid="recent-complete-1",
+            pub_date=now - timezone.timedelta(hours=2),
+            original_audio_url="http://example.com/recent.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1200,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "gemini": {
+                        "status": "success",
+                        "audio_duration_sec": 1200.0,
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 120.0},
+                },
+            },
+        )
+        # Episode 2: older than 1d (e.g. 3 days ago)
+        old_ep = Episode.objects.create(
+            podcast=self.podcast,
+            title="Older Complete Episode",
+            guid="older-complete-2",
+            pub_date=now - timezone.timedelta(days=3),
+            original_audio_url="http://example.com/older.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1800,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "gemini": {
+                        "status": "success",
+                        "audio_duration_sec": 1800.0,
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 180.0},
+                },
+            },
+        )
+        Episode.objects.filter(id=old_ep.id).update(
+            created_at=now - timezone.timedelta(days=3),
+            updated_at=now - timezone.timedelta(days=3),
+        )
+
+        # GET with ?time_window=1d
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?time_window=1d")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["time_window"], "1d")
+        # 1d metrics should only count the recent episode
+        self.assertEqual(response.context["metrics"]["completed_episodes"], 1)
+
+        # Button active state: Last 1d is active, All Time is outline
+        self.assertContains(
+            response,
+            '<a href="?time_window=1d" class="btn btn-primary active fw-semibold">Last 1d</a>',
+            html=True,
+        )
+        self.assertContains(
+            response,
+            '<a href="?" class="btn btn-outline-secondary">All Time</a>',
+            html=True,
+        )
+
+        # GET with invalid time_window should fall back to 'all'
+        response_invalid = self.client.get(reverse("podcast-subscribe-ui") + "?time_window=invalid_period")
+        self.assertEqual(response_invalid.status_code, 200)
+        self.assertEqual(response_invalid.context["time_window"], "all")
+        # All time should count both episodes
+        self.assertEqual(response_invalid.context["metrics"]["completed_episodes"], 2)
+        self.assertContains(
+            response_invalid,
+            '<a href="?" class="btn btn-primary active fw-semibold">All Time</a>',
+            html=True,
+        )
+
+    def test_subscribe_ui_preserves_query_params_on_time_window_change(self):
+        """
+        Verify that existing filters (status, podcast_id, q, sort, order) are preserved
+        in time_window_urls while page is reset, and sort/pagination links retain time_window.
+        """
+        # Create enough pending episodes to have multiple pages
+        base_time = timezone.now()
+        for i in range(12):
+            Episode.objects.create(
+                podcast=self.podcast,
+                title=f"Sample Match {i+1}",
+                guid=f"sample-guid-{i+1}",
+                original_audio_url=f"http://example.com/s{i+1}.mp3",
+                pub_date=base_time + timezone.timedelta(minutes=i),
+                status=Episode.Status.DOWNLOADING,
+            )
+
+        query = (
+            f"?q=Sample&status=DOWNLOADING&podcast_id={self.podcast.id}"
+            f"&sort=title&order=asc&page=2&time_window=1w"
+        )
+        response = self.client.get(reverse("podcast-subscribe-ui") + query)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["time_window"], "1w")
+
+        urls = response.context["time_window_urls"]
+        # Verify page is dropped in all time_window_urls
+        for tw, url in urls.items():
+            self.assertNotIn("page=", url)
+            self.assertIn("q=Sample", url)
+            self.assertIn("status=DOWNLOADING", url)
+            self.assertIn(f"podcast_id={self.podcast.id}", url)
+            self.assertIn("sort=title", url)
+            self.assertIn("order=asc", url)
+            if tw == "all":
+                self.assertNotIn("time_window=", url)
+            else:
+                self.assertIn(f"time_window={tw}", url)
+
+        # Check sort_urls preserve time_window=1w
+        sort_urls = response.context["sort_urls"]
+        for col_info in sort_urls.values():
+            self.assertIn("time_window=1w", col_info["url"])
+
+        # Check pagination links retain time_window=1w
+        self.assertContains(response, "time_window=1w")
 
     def test_pending_episodes_pagination(self):
         """

@@ -13,6 +13,7 @@ import feedparser
 from django.conf import settings
 from django.core.paginator import EmptyPage, PageNotAnInteger, Paginator
 from django.db import transaction
+from django.db.models import Q
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
@@ -299,7 +300,7 @@ class PodcastSubscribeUIView(View):
 
     PAGE_SIZE = 10
 
-    def _get_context(self, request, extra_context=None):
+    def _get_context(self, request, extra_context=None):  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         podcasts = Podcast.objects.all().order_by('title')
         last_polled_time = Podcast.objects.exclude(last_polled=None).order_by('-last_polled').first()
 
@@ -342,13 +343,33 @@ class PodcastSubscribeUIView(View):
         except EmptyPage:
             pending_page = paginator.page(paginator.num_pages if paginator.num_pages > 0 else 1)
 
+        time_window = request.GET.get("time_window", "all").strip().lower() if request.method == "GET" else "all"
+        if time_window not in ["1d", "1w", "1m", "all"]:
+            time_window = "all"
+
         query_params = request.GET.copy() if request.method == "GET" else {}
         if "page" in query_params:
             del query_params["page"]
+        if time_window == "all":
+            if "time_window" in query_params:
+                del query_params["time_window"]
+        else:
+            query_params["time_window"] = time_window
         querystring = query_params.urlencode() if hasattr(query_params, "urlencode") else ""
 
+        time_window_urls = {}
+        for tw in ["all", "1d", "1w", "1m"]:
+            tw_params = query_params.copy()
+            if tw == "all":
+                if "time_window" in tw_params:
+                    del tw_params["time_window"]
+            else:
+                tw_params["time_window"] = tw
+            tw_querystring = tw_params.urlencode() if hasattr(tw_params, "urlencode") else ""
+            time_window_urls[tw] = f"?{tw_querystring}" if tw_querystring else "?"
+
         sort_urls = {}
-        for col in self.SORT_FIELDS.keys():
+        for col in self.SORT_FIELDS:
             col_order = "desc" if (sort_by == col and order == "asc") else "asc"
             params = query_params.copy()
             params["sort"] = col
@@ -366,7 +387,9 @@ class PodcastSubscribeUIView(View):
             'podcasts': podcasts,
             'last_polled_time': last_polled_time.last_polled if last_polled_time else None,
             'pending_episodes': pending_page,
-            'metrics': MetricsService.get_system_metrics(),
+            'metrics': MetricsService.get_system_metrics(time_window=time_window),
+            'time_window': time_window,
+            'time_window_urls': time_window_urls,
             'pending_statuses': [
                 (Episode.Status.NEW, "New"),
                 (Episode.Status.QUEUED, "Queued"),
@@ -853,7 +876,18 @@ class EpisodeStatusAPIView(View):
         """
         Handles GET requests and returns the number of completed and pending episodes.
         """
-        completed_episodes = Episode.objects.filter(status=Episode.Status.COMPLETE).count()
+        time_window = request.GET.get("time_window", "all").strip().lower()
+        if time_window not in ["1d", "1w", "1m", "all"]:
+            time_window = "all"
+
+        completed_qs = Episode.objects.filter(status=Episode.Status.COMPLETE)
+        cutoff = MetricsService.get_time_window_cutoff(time_window)
+        if cutoff:
+            completed_qs = completed_qs.filter(
+                Q(updated_at__gte=cutoff) | Q(created_at__gte=cutoff)
+            )
+
+        completed_episodes = completed_qs.count()
         pending_episodes = Episode.objects.exclude(
             status__in=[Episode.Status.COMPLETE, Episode.Status.FAILED]
         ).count()

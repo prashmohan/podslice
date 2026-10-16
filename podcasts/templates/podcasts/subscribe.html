@@ -32,6 +32,16 @@
             </div>
         </div>
 
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+            <h4 class="mb-0 fs-5 fw-bold text-dark">📊 Service Metrics</h4>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Metrics Time Window Filter">
+                <a href="{{ time_window_urls.all }}" class="btn {% if time_window == 'all' %}btn-primary active fw-semibold{% else %}btn-outline-secondary{% endif %}">All Time</a>
+                <a href="{{ time_window_urls.1d }}" class="btn {% if time_window == '1d' %}btn-primary active fw-semibold{% else %}btn-outline-secondary{% endif %}">Last 1d</a>
+                <a href="{{ time_window_urls.1w }}" class="btn {% if time_window == '1w' %}btn-primary active fw-semibold{% else %}btn-outline-secondary{% endif %}">Last 1w</a>
+                <a href="{{ time_window_urls.1m }}" class="btn {% if time_window == '1m' %}btn-primary active fw-semibold{% else %}btn-outline-secondary{% endif %}">Last 1m</a>
+            </div>
+        </div>
+
         <div class="row row-cols-1 row-cols-md-2 g-3 mb-4">
             <!-- Card 1: Listener Time Saved -->
             <div class="col">
@@ -195,14 +205,14 @@
                             <div class="col-4">
                                 <div class="p-2 border rounded bg-light">
                                     <small class="text-muted d-block text-uppercase fw-bold" style="font-size: 0.75rem;">Completed</small>
-                                    <span class="fs-4 fw-bold text-success" id="completed-count">--</span>
+                                    <span class="fs-4 fw-bold text-success" id="completed-count">{{ metrics.completed_episodes|default:0 }}</span>
                                     <div class="small text-muted mt-1">Episodes</div>
                                 </div>
                             </div>
                             <div class="col-4">
                                 <div class="p-2 border rounded bg-light">
                                     <small class="text-muted d-block text-uppercase fw-bold" style="font-size: 0.75rem;">Pending</small>
-                                    <span class="fs-4 fw-bold text-warning" id="pending-count">--</span>
+                                    <span class="fs-4 fw-bold text-warning" id="pending-count">{{ total_pending_count|default:0 }}</span>
                                     <div class="small text-muted mt-1">Episodes</div>
                                 </div>
                             </div>
@@ -433,7 +443,7 @@
     })();
 
     function fetchEpisodeStatus() {
-        fetch("{% url 'episode-status-api' %}")
+        fetch("{% url 'episode-status-api' %}{% if time_window != 'all' %}?time_window={{ time_window }}{% endif %}")
             .then(response => response.json())
             .then(data => {
                 document.getElementById('completed-count').textContent = data.completed;

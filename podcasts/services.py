@@ -194,7 +194,7 @@ class MetricsService:  # pylint: disable=too-few-public-methods
             Dict[str, Any] containing aggregated counts, percentages, stage failures,
             time saved telemetry, and API key distribution.
         """
-        clean_window = (time_window or "all").strip().lower()
+        clean_window = (time_window if isinstance(time_window, str) else "all").strip().lower()
         if clean_window not in ("1d", "1w", "1m", "all"):
             clean_window = "all"
 
