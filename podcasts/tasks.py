@@ -872,9 +872,7 @@ class EpisodeProcessor:
                 self.episode.original_audio_url,
                 stream=True,
                 timeout=settings.DOWNLOAD_TIMEOUT_SEC,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-                },
+                headers={"User-Agent": BROWSER_USER_AGENT},
             )
             response.raise_for_status()
 
