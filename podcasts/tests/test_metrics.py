@@ -541,6 +541,16 @@ class MetricsServiceTest(TestCase):
         )
         self.assertEqual(mask_api_key("AIzaSy...AAA"), "AIzaSy...AAA")
         self.assertEqual(mask_api_key("...KEY_ALPHA"), "...KEY_ALPHA")
+        # Legacy short mask prefix matching against configured keys
+        self.assertEqual(
+            mask_api_key("AIzaSy...", configured_keys=["AIzaSyBmFRaUdx8RodHMc4D03DYlsImXapS93Ds"]),
+            "AIzaSy...93Ds",
+        )
+        # Unmatched legacy mask stays as is
+        self.assertEqual(
+            mask_api_key("unmatched...", configured_keys=["AIzaSyBmFRaUdx8RodHMc4D03DYlsImXapS93Ds"]),
+            "unmatched...",
+        )
 
     @override_settings(GEMINI_API_KEYS=["key1", "key2", "key3"], GEMINI_API_KEY="")
     def test_get_system_metrics_with_configured_standby_keys(self):
@@ -658,3 +668,44 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["configured_keys_count"], 2)
         self.assertEqual(len(metrics["api_keys"]), 2)
         self.assertEqual([k["key_masked"] for k in metrics["api_keys"]], ["key1", "key2"])
+
+    @override_settings(
+        GEMINI_API_KEYS=["AIzaSyAlpha1111111111", "AIzaSyBeta2222222222"],
+        GEMINI_API_KEY="",
+    )
+    def test_get_system_metrics_resolves_legacy_masked_attempts(self):
+        """Verify legacy short mask 'AIzaSy...' matches the configured key with that prefix."""
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Legacy Episode",
+            guid="guid-legacy-1",
+            pub_date="2026-04-28T12:00:00Z",
+            original_audio_url="http://e.com/leg.mp3",
+            status=Episode.Status.COMPLETE,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [
+                            {"model": "gemini-3.8-flash", "key_masked": "AIzaSy...", "status": "success"},
+                        ],
+                    },
+                    "slicing": {"status": "success"},
+                },
+            },
+        )
+
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["configured_keys_count"], 2)
+        self.assertEqual(metrics["active_keys_count"], 1)
+        self.assertEqual(len(metrics["api_keys"]), 2)
+        # First key resolved from legacy mask to configured key format
+        self.assertEqual(metrics["api_keys"][0]["key_masked"], "AIzaSy...1111")
+        self.assertTrue(metrics["api_keys"][0]["is_active"])
+        self.assertEqual(metrics["api_keys"][0]["total_calls"], 1)
+        # Second key remains on warm standby
+        self.assertEqual(metrics["api_keys"][1]["key_masked"], "AIzaSy...2222")
+        self.assertFalse(metrics["api_keys"][1]["is_active"])
+        self.assertEqual(metrics["api_keys"][1]["total_calls"], 0)

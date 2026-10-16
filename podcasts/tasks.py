@@ -24,6 +24,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from podcasts.models import Episode, Podcast, RehostedMedia
+from podcasts.services import mask_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -369,14 +370,11 @@ class AdManager:
         clients: Dict[str, Any] = {}
         uploaded_files: Dict[str, Any] = {}
 
-        def _mask_key(key: str) -> str:
-            return key[:6] + "..." if len(key) > 6 else key
-
         def _cleanup_remote_files() -> None:
             self._cleanup_remote_files(uploaded_files, clients)
 
         def _call_model_with_key(model_name: str, api_key: str) -> str:
-            masked = _mask_key(api_key)
+            masked = mask_api_key(api_key)
             try:
                 if api_key not in clients:
                     clients[api_key] = genai.Client(api_key=api_key)
@@ -448,7 +446,7 @@ class AdManager:
                     logger.warning(
                         "Gemini API call failed for model %s with key %s: %s",
                         primary_model,
-                        _mask_key(api_key),
+                        mask_api_key(api_key),
                         str(e),
                     )
                     if self._is_rate_limit_error(e):
@@ -505,7 +503,7 @@ class AdManager:
                         logger.warning(
                             "Gemini API retry failed for model %s with key %s: %s",
                             primary_model,
-                            _mask_key(api_key),
+                            mask_api_key(api_key),
                             str(e),
                         )
                         if self._is_rate_limit_error(e):
@@ -529,7 +527,7 @@ class AdManager:
                     logger.warning(
                         "Gemini API call failed for model %s with key %s: %s",
                         fallback_model,
-                        _mask_key(api_key),
+                        mask_api_key(api_key),
                         str(e),
                     )
                     if self._is_rate_limit_error(e):

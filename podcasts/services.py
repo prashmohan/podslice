@@ -96,17 +96,57 @@ def categorize_segment_label(label: Optional[str]) -> str:
     return "ads"
 
 
-def mask_api_key(key: Optional[str]) -> str:
+def mask_api_key(  # pylint: disable=too-many-return-statements,too-many-branches
+    key: Optional[str],
+    configured_keys: Optional[List[str]] = None,
+) -> str:
     """
     Mask an API key for safe display in telemetry and metrics.
     Preserves existing masked format (containing '...') or formats
     unmasked keys as prefix...suffix (or prefix... if short).
+    If a legacy short mask (e.g. 'AIzaSy...') is provided, attempts
+    to match against configured keys (or settings.GEMINI_API_KEYS)
+    to resolve to the full mask format.
     """
     if not key:
         return ""
     key_str = str(key).strip()
     if not key_str:
         return ""
+
+    if key_str.endswith("...") and len(key_str) > 3:
+        prefix = key_str[:-3]
+        conf_keys = configured_keys
+        if conf_keys is None:
+            try:
+                raw_keys = getattr(settings, "GEMINI_API_KEYS", None)
+                if isinstance(raw_keys, str):
+                    conf_keys = [
+                        k.strip().strip("'\"")
+                        for k in raw_keys.split(",")
+                        if k.strip().strip("'\"")
+                    ]
+                elif not raw_keys:
+                    single = getattr(settings, "GEMINI_API_KEY", None)
+                    conf_keys = [single] if single else []
+                elif isinstance(raw_keys, (list, tuple)):
+                    conf_keys = list(raw_keys)
+                else:
+                    conf_keys = []
+            except (AttributeError, ValueError, TypeError):
+                conf_keys = []
+
+        if conf_keys:
+            for conf_k in conf_keys:
+                conf_k_str = str(conf_k).strip().strip("'\"")
+                if conf_k_str and conf_k_str.startswith(prefix):
+                    if len(conf_k_str) > 10:
+                        return f"{conf_k_str[:6]}...{conf_k_str[-4:]}"
+                    if len(conf_k_str) > 6:
+                        return f"{conf_k_str[:6]}..."
+                    return conf_k_str
+        return key_str
+
     if "..." in key_str:
         return key_str
     if len(key_str) <= 6:
@@ -159,6 +199,25 @@ class MetricsService:  # pylint: disable=too-few-public-methods
 
         # API key tracking: key_masked -> {total_calls, rate_limits, success_count}
         keys_data: Dict[str, Dict[str, Any]] = {}
+
+        # Cross-reference configured Gemini API keys
+        configured_keys_raw = getattr(settings, "GEMINI_API_KEYS", None)
+        if isinstance(configured_keys_raw, str):
+            configured_keys_raw = [
+                k.strip().strip("'\"")
+                for k in configured_keys_raw.split(",")
+                if k.strip().strip("'\"")
+            ]
+        elif not configured_keys_raw:
+            single_key = getattr(settings, "GEMINI_API_KEY", None)
+            configured_keys_raw = [single_key] if single_key else []
+
+        configured_keys: List[str] = []
+        if configured_keys_raw and isinstance(configured_keys_raw, (list, tuple)):
+            for k in configured_keys_raw:
+                masked = mask_api_key(k)
+                if masked and masked not in configured_keys:
+                    configured_keys.append(masked)
 
         for ep in episodes:  # pylint: disable=too-many-nested-blocks
             metrics = ep.processing_metrics
@@ -341,8 +400,14 @@ class MetricsService:  # pylint: disable=too-few-public-methods
             # API Key Distribution tracking
             for att in attempts:
                 if isinstance(att, dict):
-                    key_masked = att.get("key_masked")
-                    if key_masked:
+                    raw_masked = att.get("key_masked")
+                    if raw_masked:
+                        if str(raw_masked).endswith("..."):
+                            key_masked = mask_api_key(
+                                raw_masked, configured_keys=configured_keys_raw
+                            )
+                        else:
+                            key_masked = str(raw_masked)
                         if key_masked not in keys_data:
                             keys_data[key_masked] = {
                                 "key_masked": key_masked,
@@ -400,25 +465,6 @@ class MetricsService:  # pylint: disable=too-few-public-methods
             ad_load_pct = round((total_time_saved_sec / total_original_audio) * 100.0, 1)
         else:
             ad_load_pct = 0.0
-
-        # Cross-reference configured Gemini API keys
-        configured_keys_raw = getattr(settings, "GEMINI_API_KEYS", None)
-        if isinstance(configured_keys_raw, str):
-            configured_keys_raw = [
-                k.strip().strip("'\"")
-                for k in configured_keys_raw.split(",")
-                if k.strip().strip("'\"")
-            ]
-        elif not configured_keys_raw:
-            single_key = getattr(settings, "GEMINI_API_KEY", None)
-            configured_keys_raw = [single_key] if single_key else []
-
-        configured_keys: List[str] = []
-        if configured_keys_raw and isinstance(configured_keys_raw, (list, tuple)):
-            for k in configured_keys_raw:
-                masked = mask_api_key(k)
-                if masked and masked not in configured_keys:
-                    configured_keys.append(masked)
 
         total_key_calls = sum(k["total_calls"] for k in keys_data.values())
 

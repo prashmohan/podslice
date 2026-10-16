@@ -539,6 +539,13 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertContains(response, "Processing & AI Health")
         self.assertContains(response, "429 Retry Recovery")
 
+    @override_settings(GEMINI_API_KEYS=[], GEMINI_API_KEY="")
+    def test_subscribe_ui_renders_fallback_when_no_keys_configured(self):
+        """Verify fallback badge '0 Keys Active' renders when no keys are configured and no telemetry."""
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "0 Keys Active")
+
     def test_subscribe_view_renders_2x2_metrics_grid(self):
         """
         Verify that PodcastSubscribeUIView renders the 2x2 metrics grid cards
@@ -557,6 +564,7 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertContains(response, 'id="pending-count"')
         self.assertContains(response, "Operational")
 
+    @override_settings(GEMINI_API_KEYS=["...KEY_ALPHA", "...KEY_BETA"], GEMINI_API_KEY="")
     def test_subscribe_view_renders_key_distribution_and_segment_bars(self):
         """
         Verify that key distribution progress bars and ad segment breakdown
@@ -597,12 +605,67 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         # Verify API keys telemetry rendered
         self.assertContains(response, "...KEY_ALPHA")
         self.assertContains(response, "...KEY_BETA")
-        self.assertContains(response, "2 Keys Active")
+        self.assertContains(response, "2 of 2 Keys Used")
         self.assertContains(response, "Total Audio Analyzed")
         # Verify listener time saved and segment breakdown rendered
         self.assertContains(response, "Ad Load")
         self.assertContains(response, "Total ads & filler removed")
         self.assertContains(response, "3 segments removed")
+
+    @override_settings(
+        GEMINI_API_KEYS=[
+            "AIzaSyPrimary1111111111",
+            "AIzaSyBackup2222222222",
+            "AIzaSyStandby3333333333",
+        ],
+        GEMINI_API_KEY="",
+    )
+    def test_subscribe_view_renders_configured_and_standby_keys(self):
+        """
+        Verify that Card 3 displays 'X of Y Keys Used' header badge, percentage bars
+        for active keys, and 'Standby' badges with 0 calls for standby keys.
+        """
+        Episode.objects.create(
+            podcast=self.podcast,
+            title="Active Key Episode",
+            guid="guid-active-key-1",
+            pub_date=timezone.now(),
+            original_audio_url="http://example.com/audio1.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1800,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [
+                            {
+                                "model": "gemini-3.8-flash",
+                                "key_masked": "AIzaSy...1111",
+                                "status": "success",
+                            },
+                        ],
+                    },
+                },
+            },
+        )
+        response = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response.status_code, 200)
+
+        # Header badge: 1 of 3 Keys Used
+        self.assertContains(response, "1 of 3 Keys Used")
+
+        # Active key displays call percentage badge (100.0%) and calls
+        self.assertContains(response, "AIzaSy...1111")
+        self.assertContains(response, "100.0%")
+        self.assertContains(response, "1 calls")
+
+        # Standby keys display Standby badge and 0 calls (Standby)
+        self.assertContains(response, "AIzaSy...2222")
+        self.assertContains(response, "AIzaSy...3333")
+        self.assertContains(response, '<span class="badge bg-secondary text-white">Standby</span>')
+        self.assertContains(response, "0 calls (Standby)")
+
 
     def test_pending_episodes_pagination(self):
         """
