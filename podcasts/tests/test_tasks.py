@@ -19,6 +19,7 @@ from podcasts.models import Episode, Podcast, RehostedMedia
 from podcasts.tasks import (
     GEMINI_PROMPT,
     AdManager,
+    AdSegmentSchema,
     EpisodeProcessor,
     FeedManager,
     delete_podcast_data,
@@ -269,6 +270,145 @@ class TasksClassMethodsTest(PodcastTestCase):
         mock_parse_segments.assert_called_once_with("gemini-response")
         self.episode.refresh_from_db()
         self.assertEqual(self.episode.ad_segments, "gemini-response")
+
+    @override_settings(GEMINI_API_KEYS=["test-key-1"])
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_analyze_audio_uses_response_parsed(self, mock_client_cls):
+        """
+        Verify analyze_audio uses response.parsed when provided by Gemini SDK.
+        """
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_file = mock.Mock()
+        mock_file.name = "fake_file_id"
+        mock_client.files.upload.return_value = mock_file
+
+        parsed_data = [AdSegmentSchema(start=10.0, end=25.0, label="intro")]
+        mock_response = mock.Mock(
+            parsed=parsed_data,
+            text='[{"start": 10.0, "end": 25.0, "label": "intro"}]',
+        )
+        mock_client.models.generate_content.return_value = mock_response
+
+        result = self.ad_manager.analyze_audio("/fake/path.mp3", 60.0)
+
+        self.assertEqual(result, [{"start": 10.0, "end": 25.0, "label": "intro"}])
+        self.assertEqual(self.ad_manager.last_parsed_response, parsed_data)
+        self.episode.refresh_from_db()
+        self.assertEqual(
+            self.episode.ad_segments,
+            '[{"start": 10.0, "end": 25.0, "label": "intro"}]',
+        )
+
+    @override_settings(GEMINI_API_KEYS=["test-key-1"])
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_analyze_audio_falls_back_when_response_parsed_is_none(
+        self, mock_client_cls
+    ):
+        """
+        Verify analyze_audio falls back to text parsing when response.parsed is None.
+        """
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_file = mock.Mock()
+        mock_file.name = "fake_file_id"
+        mock_client.files.upload.return_value = mock_file
+
+        mock_response = mock.Mock(
+            parsed=None,
+            text='[{"start": 30.0, "end": 50.0, "label": "ad"}]',
+        )
+        mock_client.models.generate_content.return_value = mock_response
+
+        result = self.ad_manager.analyze_audio("/fake/path.mp3", 60.0)
+
+        self.assertEqual(result, [{"start": 30.0, "end": 50.0, "label": "ad"}])
+        self.assertIsNone(self.ad_manager.last_parsed_response)
+        self.episode.refresh_from_db()
+        self.assertEqual(
+            self.episode.ad_segments,
+            '[{"start": 30.0, "end": 50.0, "label": "ad"}]',
+        )
+
+    @override_settings(GEMINI_API_KEYS=["test-key-1"])
+    @mock.patch("podcasts.tasks.genai.Client")
+    def test_analyze_audio_falls_back_when_response_parsed_is_invalid(
+        self, mock_client_cls
+    ):
+        """
+        Verify analyze_audio falls back to text parsing when response.parsed contains
+        invalid segment timestamps (e.g. end <= start).
+        """
+        mock_client = mock.Mock()
+        mock_client_cls.return_value = mock_client
+        mock_file = mock.Mock()
+        mock_file.name = "fake_file_id"
+        mock_client.files.upload.return_value = mock_file
+
+        invalid_parsed = [AdSegmentSchema(start=50.0, end=20.0, label="ad")]
+        mock_response = mock.Mock(
+            parsed=invalid_parsed,
+            text='[{"start": 10.0, "end": 20.0, "label": "ad"}]',
+        )
+        mock_client.models.generate_content.return_value = mock_response
+
+        result = self.ad_manager.analyze_audio("/fake/path.mp3", 60.0)
+
+        self.assertEqual(result, [{"start": 10.0, "end": 20.0, "label": "ad"}])
+
+    def test_parse_ad_segments_supports_pre_parsed_list(self):
+        """
+        Verify _parse_ad_segments accepts and extracts from a pre-parsed list.
+        """
+        pre_parsed = [
+            {"start": 15.0, "end": 30.0, "label": "ad"},
+            AdSegmentSchema(start=5.0, end=10.0, label="intro"),
+        ]
+        result = self.ad_manager._parse_ad_segments(pre_parsed)  # pylint: disable=protected-access
+        self.assertEqual(
+            result,
+            [
+                {"start": 5.0, "end": 10.0, "label": "intro"},
+                {"start": 15.0, "end": 30.0, "label": "ad"},
+            ],
+        )
+
+        empty_result = self.ad_manager._parse_ad_segments([])  # pylint: disable=protected-access
+        self.assertEqual(empty_result, [])
+
+    def test_extract_from_parsed(self):
+        """
+        Verify _extract_from_parsed handles None, non-iterables, schema objects, dicts,
+        timestamp normalization, end > start validation, and sorting.
+        """
+        # None and non-iterable types
+        self.assertIsNone(self.ad_manager._extract_from_parsed(None))  # pylint: disable=protected-access
+        self.assertIsNone(self.ad_manager._extract_from_parsed("string"))  # pylint: disable=protected-access
+        self.assertIsNone(self.ad_manager._extract_from_parsed(12345))  # pylint: disable=protected-access
+        self.assertIsNone(self.ad_manager._extract_from_parsed([]))  # pylint: disable=protected-access
+
+        # Mixed schema objects, dicts, MM:SS strings, sorting
+        mixed_input = [
+            {"start": "01:00", "end": "01:30", "label": "ad"},  # 60.0 to 90.0
+            AdSegmentSchema(start=10.0, end=25.0, label="intro"),  # 10.0 to 25.0
+            {"start": 100.0, "end": 50.0, "label": "invalid_end_before_start"},  # skipped
+            {"start": "bad_time", "end": 120.0},  # skipped
+            {"start": 120.0, "end": 150.0},  # default label 'ads'
+        ]
+        result = self.ad_manager._extract_from_parsed(mixed_input)  # pylint: disable=protected-access
+        expected = [
+            {"start": 10.0, "end": 25.0, "label": "intro"},
+            {"start": 60.0, "end": 90.0, "label": "ad"},
+            {"start": 120.0, "end": 150.0, "label": "ads"},
+        ]
+        self.assertEqual(result, expected)
+
+        # Only invalid items -> returns None
+        only_invalid = [
+            {"start": 100.0, "end": 50.0},
+            AdSegmentSchema(start=30.0, end=30.0, label="zero_duration"),
+        ]
+        self.assertIsNone(self.ad_manager._extract_from_parsed(only_invalid))  # pylint: disable=protected-access
 
     @mock.patch("podcasts.tasks.EpisodeProcessor._save_processed_audio")
     @mock.patch("podcasts.tasks.EpisodeProcessor._run_ffmpeg_slicing")

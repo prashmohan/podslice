@@ -93,6 +93,7 @@ class AdManager:
         """Initializes the AdManager."""
         self.episode = episode
         self.last_telemetry: Optional[Dict[str, Any]] = None
+        self.last_parsed_response: Any = None
 
     @staticmethod
     def _is_rate_limit_error(exc: Exception) -> bool:
@@ -327,6 +328,7 @@ class AdManager:
             "error": None,
         }
         self.last_telemetry = gemini_telemetry
+        self.last_parsed_response = None
 
         raw_keys = getattr(settings, "GEMINI_API_KEYS", None)
         api_keys = []
@@ -391,6 +393,7 @@ class AdManager:
                         response_schema=list[AdSegmentSchema],
                     ),
                 )
+                self.last_parsed_response = getattr(response, "parsed", None)
                 text = getattr(response, "text", None)
                 if not text or not str(text).strip():
                     reason = None
@@ -597,7 +600,50 @@ class AdManager:
                 return None
         return None
 
-    def _parse_ad_segments(self, gemini_response: str) -> List[Dict[str, float]]:
+    def _extract_from_parsed(
+        self, parsed_obj: Any
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Extracts and validates ad segments from parsed Gemini SDK objects or dicts."""
+        if parsed_obj is None or isinstance(parsed_obj, (str, bytes)):
+            return None
+        try:
+            iterator = iter(parsed_obj)
+        except TypeError:
+            return None
+
+        valid_segments: List[Dict[str, Any]] = []
+        for item in iterator:
+            if hasattr(item, "start") and hasattr(item, "end"):
+                raw_start = getattr(item, "start", None)
+                raw_end = getattr(item, "end", None)
+                label = getattr(item, "label", "ads")
+            elif isinstance(item, dict) and "start" in item and "end" in item:
+                raw_start = item.get("start")
+                raw_end = item.get("end")
+                label = item.get("label", "ads")
+            else:
+                continue
+
+            if label is None:
+                label = "ads"
+
+            start = self._normalize_timestamp(raw_start)
+            end = self._normalize_timestamp(raw_end)
+
+            if start is not None and end is not None and end > start:
+                valid_segments.append({
+                    "start": start,
+                    "end": end,
+                    "label": str(label),
+                })
+
+        if not valid_segments:
+            return None
+
+        valid_segments.sort(key=lambda s: s["start"])
+        return valid_segments
+
+    def _parse_ad_segments(self, gemini_response: Any) -> List[Dict[str, Any]]:
         """Parses the JSON response from Gemini to extract ad segments."""
         logger.debug(
             "Parsing Gemini response for Episode '%s' (%s): %s",
@@ -605,6 +651,24 @@ class AdManager:
             self.episode.id,
             gemini_response,
         )
+        if isinstance(gemini_response, list):
+            if not gemini_response:
+                return []
+            parsed = self._extract_from_parsed(gemini_response)
+            if parsed is not None:
+                return parsed
+            logger.warning(
+                "Gemini API returned invalid JSON for ad segments for Episode '%s' (%s). Response: %s",
+                self.episode.title,
+                self.episode.id,
+                gemini_response,
+            )
+            self.episode.status = Episode.Status.FAILED
+            Episode.objects.filter(id=self.episode.id).update(
+                status=Episode.Status.FAILED
+            )
+            return []
+
         if not gemini_response or not isinstance(gemini_response, str):
             logger.warning(
                 "Gemini API returned empty or non-string response for Episode '%s' (%s).",
@@ -687,7 +751,7 @@ class AdManager:
 
     def analyze_audio(
         self, audio_path: str, audio_duration_seconds: float
-    ) -> List[Dict[str, float]]:
+    ) -> List[Dict[str, Any]]:
         """Analyzes the audio, saves the raw response, and returns parsed segments."""
         gemini_response = self._get_ad_segments_from_gemini(
             audio_path, audio_duration_seconds
@@ -699,6 +763,21 @@ class AdManager:
             self.episode.title,
             gemini_response,
         )
+        if getattr(self, "last_parsed_response", None):
+            try:
+                parsed = self._extract_from_parsed(self.last_parsed_response)
+                if parsed:
+                    logger.debug(
+                        "Successfully extracted %d segments from response.parsed for '%s'",
+                        len(parsed),
+                        self.episode.title,
+                    )
+                    return parsed
+            except Exception as e:
+                logger.warning(
+                    "Error extracting segments from response.parsed: %s. Falling back to text parsing.",
+                    e,
+                )
         return self._parse_ad_segments(gemini_response)
 
 
