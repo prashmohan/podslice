@@ -393,7 +393,6 @@ class AdManager:
                         response_schema=list[AdSegmentSchema],
                     ),
                 )
-                self.last_parsed_response = getattr(response, "parsed", None)
                 text = getattr(response, "text", None)
                 if not text or not str(text).strip():
                     reason = None
@@ -407,6 +406,7 @@ class AdManager:
                     )
                     raise RuntimeError(err_msg)
 
+                self.last_parsed_response = getattr(response, "parsed", None)
                 gemini_telemetry["attempts"].append({
                     "model": model_name,
                     "key_masked": masked,
@@ -415,6 +415,7 @@ class AdManager:
                 gemini_telemetry["model_used"] = model_name
                 return text
             except Exception as e:
+                self.last_parsed_response = None
                 is_429 = self._is_rate_limit_error(e)
                 attempt_entry = {
                     "model": model_name,
@@ -763,17 +764,17 @@ class AdManager:
             self.episode.title,
             gemini_response,
         )
-        if getattr(self, "last_parsed_response", None):
+        if getattr(self, "last_parsed_response", None) is not None:
             try:
                 parsed = self._extract_from_parsed(self.last_parsed_response)
-                if parsed:
+                if parsed is not None:
                     logger.debug(
                         "Successfully extracted %d segments from response.parsed for '%s'",
                         len(parsed),
                         self.episode.title,
                     )
                     return parsed
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.warning(
                     "Error extracting segments from response.parsed: %s. Falling back to text parsing.",
                     e,
