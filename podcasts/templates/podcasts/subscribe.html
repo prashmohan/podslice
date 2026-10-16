@@ -247,8 +247,10 @@
                 {% endif %}
             </div>
             <div class="card-body">
-                <!-- Filter & Search Toolbar -->
                 <form method="get" action="{% url 'podcast-subscribe-ui' %}" class="row g-2 align-items-center mb-3">
+                    {% if time_window and time_window != 'all' %}
+                    <input type="hidden" name="time_window" value="{{ time_window }}">
+                    {% endif %}
                     <input type="hidden" name="sort" value="{{ sort_by }}">
                     <input type="hidden" name="order" value="{{ sort_order }}">
                     <div class="col-md-4 col-sm-12">
@@ -273,7 +275,7 @@
                     <div class="col-md-2 col-sm-12 d-flex gap-1">
                         <button type="submit" class="btn btn-sm btn-primary flex-grow-1">Filter</button>
                         {% if selected_status or selected_podcast or search_query %}
-                        <a href="{% url 'podcast-subscribe-ui' %}" class="btn btn-sm btn-outline-secondary" title="Reset filters">Reset</a>
+                        <a href="{% if time_window and time_window != 'all' %}?time_window={{ time_window }}{% else %}{% url 'podcast-subscribe-ui' %}{% endif %}" class="btn btn-sm btn-outline-secondary" title="Reset filters">Reset</a>
                         {% endif %}
                     </div>
                 </form>
