@@ -2,6 +2,8 @@
 Unit tests for MetricsService and duration helper functions.
 """
 import json
+from datetime import timedelta
+from django.utils import timezone
 from django.test import TestCase, override_settings
 from podcasts.models import Podcast, Episode
 from podcasts.services import (
@@ -709,3 +711,243 @@ class MetricsServiceTest(TestCase):
         self.assertEqual(metrics["api_keys"][1]["key_masked"], "AIzaSy...2222")
         self.assertFalse(metrics["api_keys"][1]["is_active"])
         self.assertEqual(metrics["api_keys"][1]["total_calls"], 0)
+
+    def test_get_time_window_cutoff_boundaries(self):
+        """Verify get_time_window_cutoff calculates correct cutoffs for 1d, 1w, 1m, all, and invalid inputs."""
+        now = timezone.now()
+
+        # 1d cutoff (~24 hours ago)
+        cutoff_1d = MetricsService.get_time_window_cutoff("1d")
+        self.assertIsNotNone(cutoff_1d)
+        delta_1d = (now - cutoff_1d).total_seconds()
+        self.assertAlmostEqual(delta_1d, 86400, delta=5)
+
+        # 1w cutoff (~7 days ago)
+        cutoff_1w = MetricsService.get_time_window_cutoff("1w")
+        self.assertIsNotNone(cutoff_1w)
+        delta_1w = (now - cutoff_1w).total_seconds()
+        self.assertAlmostEqual(delta_1w, 7 * 86400, delta=5)
+
+        # 1m cutoff (~30 days ago)
+        cutoff_1m = MetricsService.get_time_window_cutoff("1m")
+        self.assertIsNotNone(cutoff_1m)
+        delta_1m = (now - cutoff_1m).total_seconds()
+        self.assertAlmostEqual(delta_1m, 30 * 86400, delta=5)
+
+        # Case-insensitivity and whitespace stripping
+        cutoff_upper = MetricsService.get_time_window_cutoff("  1D  ")
+        self.assertIsNotNone(cutoff_upper)
+        self.assertAlmostEqual((now - cutoff_upper).total_seconds(), 86400, delta=5)
+
+        # "all" should return None
+        self.assertIsNone(MetricsService.get_time_window_cutoff("all"))
+        self.assertIsNone(MetricsService.get_time_window_cutoff("ALL"))
+
+        # None, empty, and invalid strings should return None
+        self.assertIsNone(MetricsService.get_time_window_cutoff(None))
+        self.assertIsNone(MetricsService.get_time_window_cutoff(""))
+        self.assertIsNone(MetricsService.get_time_window_cutoff("invalid_window"))
+        self.assertIsNone(MetricsService.get_time_window_cutoff("2w"))
+
+    @override_settings(GEMINI_API_KEYS=[], GEMINI_API_KEY="")
+    def test_get_system_metrics_with_time_window(self):
+        """Verify get_system_metrics filters episodes according to 1d, 1w, 1m, and all windows."""
+        now = timezone.now()
+
+        # Ep 1: updated 2 hours ago (within 1d, 1w, 1m, all)
+        ep1 = Episode.objects.create(
+            podcast=self.podcast,
+            title="E_2h_ago",
+            guid="g_2h",
+            pub_date="2026-10-15T00:00:00Z",
+            original_audio_url="http://e.com/2h.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1800,
+            ad_segments=[{"start": 0.0, "end": 60.0, "label": "ad"}],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [{"model": "gemini-3.8-flash", "key_masked": "key_1d", "status": "success"}],
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 60.0},
+                },
+            },
+        )
+        time_2h_ago = now - timedelta(hours=2)
+        Episode.objects.filter(id=ep1.id).update(created_at=time_2h_ago, updated_at=time_2h_ago)
+
+        # Ep 2: updated 3 days ago (within 1w, 1m, all; NOT 1d)
+        ep2 = Episode.objects.create(
+            podcast=self.podcast,
+            title="E_3d_ago",
+            guid="g_3d",
+            pub_date="2026-10-12T00:00:00Z",
+            original_audio_url="http://e.com/3d.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1800,
+            ad_segments=[{"start": 0.0, "end": 40.0, "label": "intro"}],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [{"model": "gemini-3.8-flash", "key_masked": "key_1w", "status": "success"}],
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 40.0},
+                },
+            },
+        )
+        time_3d_ago = now - timedelta(days=3)
+        Episode.objects.filter(id=ep2.id).update(created_at=time_3d_ago, updated_at=time_3d_ago)
+
+        # Ep 3: updated 15 days ago (within 1m, all; NOT 1d, 1w)
+        ep3 = Episode.objects.create(
+            podcast=self.podcast,
+            title="E_15d_ago",
+            guid="g_15d",
+            pub_date="2026-10-01T00:00:00Z",
+            original_audio_url="http://e.com/15d.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1800,
+            ad_segments=[{"start": 0.0, "end": 30.0, "label": "cta"}],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [{"model": "gemini-3.8-flash", "key_masked": "key_1m", "status": "success"}],
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 30.0},
+                },
+            },
+        )
+        time_15d_ago = now - timedelta(days=15)
+        Episode.objects.filter(id=ep3.id).update(created_at=time_15d_ago, updated_at=time_15d_ago)
+
+        # Ep 4: updated 45 days ago (within all; NOT 1d, 1w, 1m)
+        ep4 = Episode.objects.create(
+            podcast=self.podcast,
+            title="E_45d_ago",
+            guid="g_45d",
+            pub_date="2026-09-01T00:00:00Z",
+            original_audio_url="http://e.com/45d.mp3",
+            status=Episode.Status.COMPLETE,
+            duration_seconds=1800,
+            ad_segments=[{"start": 0.0, "end": 20.0, "label": "ad"}],
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {
+                        "status": "success",
+                        "attempts": [{"model": "gemini-3.8-flash", "key_masked": "key_all", "status": "success"}],
+                    },
+                    "slicing": {"status": "success", "removed_duration_sec": 20.0},
+                },
+            },
+        )
+        time_45d_ago = now - timedelta(days=45)
+        Episode.objects.filter(id=ep4.id).update(created_at=time_45d_ago, updated_at=time_45d_ago)
+
+        # Window "1d": only ep1
+        metrics_1d = MetricsService.get_system_metrics(time_window="1d")
+        self.assertEqual(metrics_1d["time_window"], "1d")
+        self.assertEqual(metrics_1d["total_episodes_processed"], 1)
+        self.assertEqual(metrics_1d["completed_episodes"], 1)
+        self.assertEqual(metrics_1d["total_time_saved_sec"], 60.0)
+        self.assertEqual(metrics_1d["total_segments_removed"], 1)
+        self.assertEqual(metrics_1d["segment_types"], {"ads": 1, "intros_outros": 0, "ctas": 0})
+        self.assertEqual(len(metrics_1d["api_keys"]), 1)
+        self.assertEqual(metrics_1d["api_keys"][0]["key_masked"], "key_1d")
+
+        # Window "1w": ep1 + ep2
+        metrics_1w = MetricsService.get_system_metrics(time_window="1w")
+        self.assertEqual(metrics_1w["time_window"], "1w")
+        self.assertEqual(metrics_1w["total_episodes_processed"], 2)
+        self.assertEqual(metrics_1w["completed_episodes"], 2)
+        self.assertEqual(metrics_1w["total_time_saved_sec"], 100.0)
+        self.assertEqual(metrics_1w["total_segments_removed"], 2)
+        self.assertEqual(metrics_1w["segment_types"], {"ads": 1, "intros_outros": 1, "ctas": 0})
+        self.assertEqual(len(metrics_1w["api_keys"]), 2)
+
+        # Window "1m": ep1 + ep2 + ep3
+        metrics_1m = MetricsService.get_system_metrics(time_window="1m")
+        self.assertEqual(metrics_1m["time_window"], "1m")
+        self.assertEqual(metrics_1m["total_episodes_processed"], 3)
+        self.assertEqual(metrics_1m["completed_episodes"], 3)
+        self.assertEqual(metrics_1m["total_time_saved_sec"], 130.0)
+        self.assertEqual(metrics_1m["total_segments_removed"], 3)
+        self.assertEqual(metrics_1m["segment_types"], {"ads": 1, "intros_outros": 1, "ctas": 1})
+        self.assertEqual(len(metrics_1m["api_keys"]), 3)
+
+        # Window "all": all 4 episodes
+        metrics_all = MetricsService.get_system_metrics(time_window="all")
+        self.assertEqual(metrics_all["time_window"], "all")
+        self.assertEqual(metrics_all["total_episodes_processed"], 4)
+        self.assertEqual(metrics_all["completed_episodes"], 4)
+        self.assertEqual(metrics_all["total_time_saved_sec"], 150.0)
+        self.assertEqual(metrics_all["total_segments_removed"], 4)
+        self.assertEqual(metrics_all["segment_types"], {"ads": 2, "intros_outros": 1, "ctas": 1})
+        self.assertEqual(len(metrics_all["api_keys"]), 4)
+
+    @override_settings(GEMINI_API_KEYS=[], GEMINI_API_KEY="")
+    def test_get_system_metrics_empty_window_safety(self):
+        """Verify get_system_metrics handles empty time window safely without ZeroDivisionError."""
+        now = timezone.now()
+        # Episode older than 30 days
+        ep = Episode.objects.create(
+            podcast=self.podcast,
+            title="E_Old",
+            guid="g_old",
+            pub_date="2026-08-01T00:00:00Z",
+            original_audio_url="http://e.com/old.mp3",
+            status=Episode.Status.COMPLETE,
+            processing_metrics={
+                "status": "COMPLETE",
+                "stages": {
+                    "download": {"status": "success"},
+                    "gemini": {"status": "success"},
+                    "slicing": {"status": "success"},
+                },
+            },
+        )
+        old_time = now - timedelta(days=60)
+        Episode.objects.filter(id=ep.id).update(created_at=old_time, updated_at=old_time)
+
+        # Filter by 1d which has 0 episodes
+        metrics = MetricsService.get_system_metrics(time_window="1d")
+        self.assertEqual(metrics["time_window"], "1d")
+        self.assertEqual(metrics["total_episodes_processed"], 0)
+        self.assertEqual(metrics["completed_episodes"], 0)
+        self.assertEqual(metrics["unresolved_failures"], 0)
+        self.assertEqual(metrics["clean_runs_pct"], 100.0)
+        self.assertEqual(metrics["retry_recovery_rate_pct"], 100.0)
+        self.assertEqual(metrics["fallback_model_pct"], 0.0)
+        self.assertEqual(metrics["total_time_saved_sec"], 0.0)
+        self.assertEqual(metrics["ad_load_pct"], 0.0)
+        self.assertEqual(metrics["api_keys"], [])
+
+    def test_get_system_metrics_default_is_all(self):
+        """Verify get_system_metrics() default call filters by 'all' for 100% backward compatibility."""
+        now = timezone.now()
+        ep = Episode.objects.create(
+            podcast=self.podcast,
+            title="E_Default",
+            guid="g_def",
+            pub_date="2026-08-01T00:00:00Z",
+            original_audio_url="http://e.com/def.mp3",
+            status=Episode.Status.COMPLETE,
+            processing_metrics={"status": "COMPLETE"},
+        )
+        old_time = now - timedelta(days=90)
+        Episode.objects.filter(id=ep.id).update(created_at=old_time, updated_at=old_time)
+
+        # Call with no arguments
+        metrics = MetricsService.get_system_metrics()
+        self.assertEqual(metrics["time_window"], "all")
+        self.assertEqual(metrics["total_episodes_processed"], 1)

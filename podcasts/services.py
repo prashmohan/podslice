@@ -1,10 +1,13 @@
 """
 Services module for computing system metrics, duration formatting, and segment classifications.
 """
+import datetime
 import json
 import logging
 from typing import Any, Dict, List, Optional
 from django.conf import settings
+from django.db.models import Q
+from django.utils import timezone
 from podcasts.models import Episode
 
 logger = logging.getLogger(__name__)
@@ -160,15 +163,47 @@ class MetricsService:  # pylint: disable=too-few-public-methods
     """Service for calculating system-wide pipeline execution and AI resilience metrics."""
 
     @staticmethod
-    def get_system_metrics() -> Dict[str, Any]:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements,too-many-nested-blocks
+    def get_time_window_cutoff(time_window: Optional[str]) -> Optional[datetime.datetime]:
         """
-        Aggregates processing metrics across all episodes having telemetry data.
+        Computes the cutoff datetime for a given time window filter.
+
+        Args:
+            time_window: "1d", "1w", "1m", or "all" / None.
+
+        Returns:
+            Cutoff datetime or None if "all" or unrecognized.
+        """
+        if not time_window or not isinstance(time_window, str):
+            return None
+        cleaned = time_window.strip().lower()
+        if cleaned == "1d":
+            return timezone.now() - datetime.timedelta(days=1)
+        if cleaned == "1w":
+            return timezone.now() - datetime.timedelta(days=7)
+        if cleaned == "1m":
+            return timezone.now() - datetime.timedelta(days=30)
+        return None
+
+    @staticmethod
+    def get_system_metrics(time_window: Optional[str] = "all") -> Dict[str, Any]:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements,too-many-nested-blocks
+        """
+        Aggregates processing metrics across all episodes having telemetry data,
+        optionally filtered by time window ('1d', '1w', '1m', 'all').
 
         Returns:
             Dict[str, Any] containing aggregated counts, percentages, stage failures,
             time saved telemetry, and API key distribution.
         """
+        clean_window = (time_window or "all").strip().lower()
+        if clean_window not in ("1d", "1w", "1m", "all"):
+            clean_window = "all"
+
         episodes = Episode.objects.exclude(processing_metrics=None)
+        cutoff = MetricsService.get_time_window_cutoff(clean_window)
+        if cutoff:
+            episodes = episodes.filter(
+                Q(updated_at__gte=cutoff) | Q(created_at__gte=cutoff)
+            )
 
         total_episodes_processed = 0
         completed_episodes = 0
@@ -507,6 +542,7 @@ class MetricsService:  # pylint: disable=too-few-public-methods
         )
 
         return {
+            "time_window": clean_window,
             "total_episodes_processed": total_episodes_processed,
             "completed_episodes": completed_episodes,
             "unresolved_failures": unresolved_failures,

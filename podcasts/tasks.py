@@ -1186,10 +1186,12 @@ class EpisodeProcessor:
                     metrics["status"] = "FAILED"
                     metrics["unresolved_error"] = "Failed to download audio or determine duration"
                     metrics["total_duration_sec"] = round(time.time() - start_time, 2)
+                    metrics["completed_at"] = timezone.now().isoformat()
                     self.episode.processing_metrics = metrics
                     Episode.objects.filter(id=self.episode.id).update(
                         status=Episode.Status.FAILED,
                         processing_metrics=metrics,
+                        updated_at=timezone.now(),
                     )
                 return
 
@@ -1279,6 +1281,7 @@ class EpisodeProcessor:
             # Complete
             total_duration = round(time.time() - start_time, 2)
             metrics["status"] = "COMPLETE"
+            metrics["completed_at"] = timezone.now().isoformat()
             metrics["total_duration_sec"] = total_duration
             metrics["unresolved_error"] = None
             self.episode.processing_metrics = metrics
@@ -1286,6 +1289,7 @@ class EpisodeProcessor:
             Episode.objects.filter(id=self.episode.id).update(
                 status=Episode.Status.COMPLETE,
                 processing_metrics=metrics,
+                updated_at=timezone.now(),
             )
 
         except Exception as e:
@@ -1337,6 +1341,7 @@ class EpisodeProcessor:
 
             total_duration = round(time.time() - start_time, 2)
             metrics["status"] = "FAILED"
+            metrics["completed_at"] = timezone.now().isoformat()
             metrics["total_duration_sec"] = total_duration
             metrics["unresolved_error"] = str(e)
             self.episode.processing_metrics = metrics
@@ -1344,6 +1349,7 @@ class EpisodeProcessor:
             Episode.objects.filter(id=self.episode.id).update(
                 status=Episode.Status.FAILED,
                 processing_metrics=metrics,
+                updated_at=timezone.now(),
             )
         finally:
             if audio_path:
