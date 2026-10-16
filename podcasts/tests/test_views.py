@@ -1395,7 +1395,8 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertContains(response, "No pending episodes match the selected filter criteria.")
         self.assertContains(
             response,
-            "Switch the status filter to <strong>All Statuses</strong> or <strong>Complete</strong> to view processed episodes.",
+            "Switch the status filter to <strong>All Statuses</strong> or "
+            "<strong>Complete</strong> to view processed episodes.",
         )
 
         # When searching with a specific status and 0 match, generic empty message
