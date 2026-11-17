@@ -233,7 +233,7 @@
         </div>
 
 
-        {% if total_episodes_count > 0 or selected_status or selected_podcast or search_query %}
+        {% if total_episodes_count > 0 or selected_status and selected_status != 'all' or selected_podcast or search_query %}
         <div class="card shadow-sm mb-4" id="pending-episodes-panel">
             <div class="card-header bg-light d-flex justify-content-between align-items-center">
                 <div class="d-flex align-items-center">
@@ -248,7 +248,7 @@
             </div>
             <div class="card-body">
                 <form method="get" action="{% url 'podcast-subscribe-ui' %}" class="row g-2 align-items-center mb-3">
-                    {% if time_window and time_window != 'all' %}
+                    {% if time_window and time_window != '1d' %}
                     <input type="hidden" name="time_window" value="{{ time_window }}">
                     {% endif %}
                     <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -266,8 +266,8 @@
                     </div>
                     <div class="col-md-3 col-sm-6">
                         <select name="status" class="form-select form-select-sm">
-                            <option value="">All Pending Statuses</option>
-                            <option value="all"{% if selected_status == 'all' %} selected{% endif %}>All Statuses</option>
+                            <option value="all"{% if selected_status == 'all' or not selected_status %} selected{% endif %}>All Statuses</option>
+                            <option value="pending"{% if selected_status == 'pending' %} selected{% endif %}>All Pending Statuses</option>
                             {% for s_val, s_label in all_statuses %}
                             <option value="{{ s_val }}"{% if selected_status == s_val %} selected{% endif %}>{{ s_label }}</option>
                             {% endfor %}
@@ -275,8 +275,8 @@
                     </div>
                     <div class="col-md-2 col-sm-12 d-flex gap-1">
                         <button type="submit" class="btn btn-sm btn-primary flex-grow-1">Filter</button>
-                        {% if selected_status or selected_podcast or search_query %}
-                        <a href="{% if time_window and time_window != 'all' %}?time_window={{ time_window }}{% else %}{% url 'podcast-subscribe-ui' %}{% endif %}" class="btn btn-sm btn-outline-secondary" title="Reset filters">Reset</a>
+                        {% if selected_status and selected_status != 'all' or selected_podcast or search_query %}
+                        <a href="{% if time_window and time_window != '1d' %}?time_window={{ time_window }}{% else %}{% url 'podcast-subscribe-ui' %}{% endif %}" class="btn btn-sm btn-outline-secondary" title="Reset filters">Reset</a>
                         {% endif %}
                     </div>
                 </form>
@@ -400,7 +400,7 @@
 
                 {% else %}
                 <div class="text-center py-4 text-muted">
-                    {% if selected_status == "" or selected_status == "pending" %}
+                    {% if selected_status == "pending" %}
                         <p class="mb-2">No pending episodes match the selected filter criteria.</p>
                         {% if total_episodes_count > 0 %}
                         <p class="small text-muted mb-2">Switch the status filter to <strong>All Statuses</strong> or <strong>Complete</strong> to view processed episodes.</p>
@@ -408,7 +408,7 @@
                     {% else %}
                         <p class="mb-2">No episodes match the selected filter criteria.</p>
                     {% endif %}
-                    <a href="{% if time_window and time_window != 'all' %}?time_window={{ time_window }}{% else %}{% url 'podcast-subscribe-ui' %}{% endif %}" class="btn btn-sm btn-outline-primary">Reset Filters</a>
+                    <a href="{% if time_window and time_window != '1d' %}?time_window={{ time_window }}{% else %}{% url 'podcast-subscribe-ui' %}{% endif %}" class="btn btn-sm btn-outline-primary">Reset Filters</a>
                 </div>
                 {% endif %}
             </div>

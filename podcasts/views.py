@@ -280,7 +280,7 @@ def create_podcast_from_url(rss_url: str, download_all: bool = False) -> Podcast
 class PodcastSubscribeUIView(View):
     """
     A view to render the subscription form and handle its submission,
-    displaying metrics and a paginated, filterable, sortable list of pending episodes.
+    displaying metrics and a paginated, filterable, sortable list of episodes.
     """
 
     PENDING_STATUSES = [
@@ -309,16 +309,16 @@ class PodcastSubscribeUIView(View):
         episodes_qs = Episode.objects.select_related('podcast')
 
         status_filter = request.GET.get("status", "").strip() if request.method == "GET" else ""
-        if status_filter.lower() == "all":
-            status_filter = "all"
+        if status_filter.lower() == "pending":
+            status_filter = "pending"
+            episodes_qs = episodes_qs.filter(status__in=self.PENDING_STATUSES)
         elif status_filter in Episode.Status.values:
             episodes_qs = episodes_qs.filter(status=status_filter)
         elif status_filter.upper() in Episode.Status.values:
             status_filter = status_filter.upper()
             episodes_qs = episodes_qs.filter(status=status_filter)
         else:
-            episodes_qs = episodes_qs.filter(status__in=self.PENDING_STATUSES)
-            status_filter = ""
+            status_filter = "all"
 
         podcast_id_filter = request.GET.get("podcast_id", "").strip() if request.method == "GET" else ""
         if podcast_id_filter:
@@ -332,9 +332,9 @@ class PodcastSubscribeUIView(View):
         if sort_by not in self.SORT_FIELDS:
             sort_by = "pub_date"
 
-        order = request.GET.get("order", "asc").strip().lower() if request.method == "GET" else "asc"
+        order = request.GET.get("order", "desc").strip().lower() if request.method == "GET" else "desc"
         if order not in ["asc", "desc"]:
-            order = "asc"
+            order = "desc"
 
         sort_field = self.SORT_FIELDS[sort_by]
         if order == "desc":
@@ -351,18 +351,18 @@ class PodcastSubscribeUIView(View):
         except EmptyPage:
             pending_page = paginator.page(paginator.num_pages if paginator.num_pages > 0 else 1)
 
-        time_window = request.GET.get("time_window", "all").strip().lower() if request.method == "GET" else "all"
+        time_window = request.GET.get("time_window", "1d").strip().lower() if request.method == "GET" else "1d"
         if time_window not in ["1d", "1w", "1m", "all"]:
-            time_window = "all"
+            time_window = "1d"
 
         query_params = request.GET.copy() if request.method == "GET" else {}
         if "page" in query_params:
             del query_params["page"]
-        if status_filter:
+        if status_filter and status_filter != "all":
             query_params["status"] = status_filter
         elif "status" in query_params:
             del query_params["status"]
-        if time_window == "all":
+        if time_window == "1d":
             if "time_window" in query_params:
                 del query_params["time_window"]
         else:
@@ -372,7 +372,7 @@ class PodcastSubscribeUIView(View):
         time_window_urls = {}
         for tw in ["all", "1d", "1w", "1m"]:
             tw_params = query_params.copy()
-            if tw == "all":
+            if tw == "1d":
                 if "time_window" in tw_params:
                     del tw_params["time_window"]
             else:

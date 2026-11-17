@@ -764,13 +764,13 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
     def test_subscribe_ui_renders_time_window_filter(self):
         """
         Verify that the main UI page renders filter buttons for 'All Time', 'Last 1d',
-        'Last 1w', and 'Last 1m' with correct links and active state.
+        'Last 1w', and 'Last 1m' with 'Last 1d' active by default.
         """
         response = self.client.get(reverse("podcast-subscribe-ui"))
         self.assertEqual(response.status_code, 200)
         self.assertIn("time_window", response.context)
         self.assertIn("time_window_urls", response.context)
-        self.assertEqual(response.context["time_window"], "all")
+        self.assertEqual(response.context["time_window"], "1d")
 
         # Check button group header and buttons
         self.assertContains(response, "Service Metrics")
@@ -780,15 +780,15 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertContains(response, "Last 1w")
         self.assertContains(response, "Last 1m")
 
-        # Active state: "All Time" should be active, others outline-secondary
+        # Active state: "Last 1d" should be active by default, others outline-secondary
         self.assertContains(
             response,
-            '<a href="?" class="btn btn-primary active fw-semibold">All Time</a>',
+            '<a href="?time_window=all" class="btn btn-outline-secondary">All Time</a>',
             html=True,
         )
         self.assertContains(
             response,
-            '<a href="?time_window=1d" class="btn btn-outline-secondary">Last 1d</a>',
+            '<a href="?" class="btn btn-primary active fw-semibold">Last 1d</a>',
             html=True,
         )
         self.assertContains(
@@ -804,8 +804,8 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
 
     def test_subscribe_ui_filters_metrics_by_time_window(self):
         """
-        Verify GET with ?time_window=1d passes '1d' to MetricsService and marks
-        'Last 1d' button active, and that invalid time_window falls back to 'all'.
+        Verify default GET uses '1d', GET with ?time_window=all counts all episodes,
+        and invalid time_window falls back to '1d'.
         """
         now = timezone.now()
         # Episode 1: within 1d
@@ -853,34 +853,38 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
             updated_at=now - timezone.timedelta(days=3),
         )
 
-        # GET with ?time_window=1d
-        response = self.client.get(reverse("podcast-subscribe-ui") + "?time_window=1d")
+        # Default GET (no time_window) should use '1d'
+        response_default = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(response_default.status_code, 200)
+        self.assertEqual(response_default.context["time_window"], "1d")
+        self.assertEqual(response_default.context["metrics"]["completed_episodes"], 1)
+
+        # GET with ?time_window=all should count both episodes and mark All Time active
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?time_window=all")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["time_window"], "1d")
-        # 1d metrics should only count the recent episode
-        self.assertEqual(response.context["metrics"]["completed_episodes"], 1)
-
-        # Button active state: Last 1d is active, All Time is outline
+        self.assertEqual(response.context["time_window"], "all")
+        self.assertEqual(response.context["metrics"]["completed_episodes"], 2)
         self.assertContains(
             response,
-            '<a href="?time_window=1d" class="btn btn-primary active fw-semibold">Last 1d</a>',
+            '<a href="?time_window=all" class="btn btn-primary active fw-semibold">All Time</a>',
             html=True,
         )
         self.assertContains(
             response,
-            '<a href="?" class="btn btn-outline-secondary">All Time</a>',
+            '<a href="?" class="btn btn-outline-secondary">Last 1d</a>',
             html=True,
         )
+        # Hidden input in filter form preserves time_window=all
+        self.assertContains(response, '<input type="hidden" name="time_window" value="all">')
 
-        # GET with invalid time_window should fall back to 'all'
+        # GET with invalid time_window should fall back to '1d'
         response_invalid = self.client.get(reverse("podcast-subscribe-ui") + "?time_window=invalid_period")
         self.assertEqual(response_invalid.status_code, 200)
-        self.assertEqual(response_invalid.context["time_window"], "all")
-        # All time should count both episodes
-        self.assertEqual(response_invalid.context["metrics"]["completed_episodes"], 2)
+        self.assertEqual(response_invalid.context["time_window"], "1d")
+        self.assertEqual(response_invalid.context["metrics"]["completed_episodes"], 1)
         self.assertContains(
             response_invalid,
-            '<a href="?" class="btn btn-primary active fw-semibold">All Time</a>',
+            '<a href="?" class="btn btn-primary active fw-semibold">Last 1d</a>',
             html=True,
         )
 
@@ -918,7 +922,7 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
             self.assertIn(f"podcast_id={self.podcast.id}", url)
             self.assertIn("sort=title", url)
             self.assertIn("order=asc", url)
-            if tw == "all":
+            if tw == "1d":
                 self.assertNotIn("time_window=", url)
             else:
                 self.assertIn(f"time_window={tw}", url)
@@ -1006,10 +1010,10 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertEqual(len(episodes), 1)
         self.assertEqual(episodes[0].title, "Downloading Episode")
 
-    def test_episodes_filter_default_shows_pending_statuses(self):
+    def test_episodes_filter_default_shows_all_statuses_and_pending_filter_works(self):
         """
-        When no status is provided, only pending episodes are included;
-        complete and failed episodes are excluded.
+        When no status is provided, all episodes (including COMPLETE and FAILED) are shown
+        by default; ?status=pending filters exclusively to pending statuses.
         """
         Episode.objects.create(
             podcast=self.podcast,
@@ -1036,9 +1040,10 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
             status=Episode.Status.FAILED,
         )
 
+        # Default (no status param) shows all statuses
         response = self.client.get(reverse("podcast-subscribe-ui"))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["selected_status"], "")
+        self.assertEqual(response.context["selected_status"], "all")
         self.assertIn("all_statuses", response.context)
         self.assertIn("total_episodes_count", response.context)
         self.assertEqual(response.context["total_episodes_count"], 4)
@@ -1047,10 +1052,20 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         titles = [e.title for e in episodes]
         self.assertIn("Test Episode", titles)
         self.assertIn("Downloading Ep", titles)
-        self.assertNotIn("Complete Ep", titles)
-        self.assertNotIn("Failed Ep", titles)
+        self.assertIn("Complete Ep", titles)
+        self.assertIn("Failed Ep", titles)
         self.assertIn("episodes", response.context)
         self.assertEqual(list(response.context["episodes"]), episodes)
+
+        # ?status=pending filters to only pending statuses
+        response_pending = self.client.get(reverse("podcast-subscribe-ui") + "?status=pending")
+        self.assertEqual(response_pending.status_code, 200)
+        self.assertEqual(response_pending.context["selected_status"], "pending")
+        pending_titles = [e.title for e in response_pending.context["pending_episodes"]]
+        self.assertIn("Test Episode", pending_titles)
+        self.assertIn("Downloading Ep", pending_titles)
+        self.assertNotIn("Complete Ep", pending_titles)
+        self.assertNotIn("Failed Ep", pending_titles)
 
     def test_episodes_filter_all_statuses(self):
         """
@@ -1233,6 +1248,14 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
             status=Episode.Status.DOWNLOADING,
         )
 
+        # Default sort (no sort/order params) is pub_date descending
+        res_default = self.client.get(reverse("podcast-subscribe-ui"))
+        self.assertEqual(res_default.status_code, 200)
+        self.assertEqual(res_default.context["sort_by"], "pub_date")
+        self.assertEqual(res_default.context["sort_order"], "desc")
+        episodes = list(res_default.context["pending_episodes"])
+        self.assertEqual([e.id for e in episodes], [ep_b.id, ep_a.id])
+
         # Sort by title desc
         res_title_desc = self.client.get(reverse("podcast-subscribe-ui") + "?sort=title&order=desc")
         episodes = list(res_title_desc.context["pending_episodes"])
@@ -1243,16 +1266,16 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         episodes = list(res_title_asc.context["pending_episodes"])
         self.assertEqual([e.id for e in episodes], [ep_a.id, ep_b.id])
 
-        # Sort by pub_date desc
-        res_date_desc = self.client.get(reverse("podcast-subscribe-ui") + "?sort=pub_date&order=desc")
-        episodes = list(res_date_desc.context["pending_episodes"])
-        self.assertEqual([e.id for e in episodes], [ep_b.id, ep_a.id])
+        # Sort by pub_date asc
+        res_date_asc = self.client.get(reverse("podcast-subscribe-ui") + "?sort=pub_date&order=asc")
+        episodes = list(res_date_asc.context["pending_episodes"])
+        self.assertEqual([e.id for e in episodes], [ep_a.id, ep_b.id])
 
-        # Invalid sort key falls back to default
-        res_invalid = self.client.get(reverse("podcast-subscribe-ui") + "?sort=hacked_column&order=asc")
+        # Invalid sort key and order fall back to defaults (pub_date desc)
+        res_invalid = self.client.get(reverse("podcast-subscribe-ui") + "?sort=hacked_column&order=invalid")
         self.assertEqual(res_invalid.status_code, 200)
         episodes = list(res_invalid.context["pending_episodes"])
-        self.assertEqual([e.id for e in episodes], [ep_a.id, ep_b.id])
+        self.assertEqual([e.id for e in episodes], [ep_b.id, ep_a.id])
 
     def test_pending_episodes_template_rendering(self):
         """
@@ -1293,12 +1316,19 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         """
         response = self.client.get(reverse("podcast-subscribe-ui") + "?q=NonExistentEpisode123")
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "No pending episodes match the selected filter criteria.")
+        self.assertContains(response, "No episodes match the selected filter criteria.")
         self.assertContains(response, "Reset Filters")
+
+        response_pending = self.client.get(
+            reverse("podcast-subscribe-ui") + "?status=pending&q=NonExistentEpisode123"
+        )
+        self.assertEqual(response_pending.status_code, 200)
+        self.assertContains(response_pending, "No pending episodes match the selected filter criteria.")
+        self.assertContains(response_pending, "Reset Filters")
 
     def test_pending_episodes_card_hidden_when_no_pending_and_no_filter(self):
         """
-        Verify pending episodes card is hidden when there are 0 pending episodes.
+        Verify pending episodes card is hidden when there are 0 episodes and no filters.
         """
         Episode.objects.all().delete()
         response = self.client.get(reverse("podcast-subscribe-ui"))
@@ -1308,27 +1338,31 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
     def test_episodes_template_dropdown_options(self):
         """
         Verify the status select dropdown renders:
-        - "All Pending Statuses" with value=""
-        - "All Statuses" with value="all"
+        - "All Statuses" with value="all" (selected by default)
+        - "All Pending Statuses" with value="pending"
         - Individual choices including Complete and Failed
         - Appropriate selected attributes when filtered.
         """
         response = self.client.get(reverse("podcast-subscribe-ui"))
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, '<option value="">All Pending Statuses</option>')
-        self.assertContains(response, '<option value="all">All Statuses</option>')
+        self.assertContains(response, '<option value="all" selected>All Statuses</option>')
+        self.assertContains(response, '<option value="pending">All Pending Statuses</option>')
         self.assertContains(response, '<option value="COMPLETE">Complete</option>')
         self.assertContains(response, '<option value="FAILED">Failed</option>')
+        # Reset link should not render on default load with no active filters
+        self.assertNotContains(response, 'title="Reset filters"')
 
-        # When status=all is selected
-        res_all = self.client.get(reverse("podcast-subscribe-ui") + "?status=all")
-        self.assertEqual(res_all.status_code, 200)
-        self.assertContains(res_all, '<option value="all" selected>All Statuses</option>')
+        # When status=pending is selected
+        res_pending = self.client.get(reverse("podcast-subscribe-ui") + "?status=pending")
+        self.assertEqual(res_pending.status_code, 200)
+        self.assertContains(res_pending, '<option value="pending" selected>All Pending Statuses</option>')
+        self.assertContains(res_pending, 'title="Reset filters"')
 
         # When status=COMPLETE is selected
         res_comp = self.client.get(reverse("podcast-subscribe-ui") + "?status=COMPLETE")
         self.assertEqual(res_comp.status_code, 200)
         self.assertContains(res_comp, '<option value="COMPLETE" selected>Complete</option>')
+        self.assertContains(res_comp, 'title="Reset filters"')
 
     def test_episodes_template_complete_and_failed_badges(self):
         """
@@ -1359,8 +1393,7 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
     def test_episodes_panel_visible_when_completed_episodes_exist(self):
         """
         Verify that when there are completed episodes but 0 pending episodes,
-        the episodes panel is still visible (allowing user to switch filter to All/Complete)
-        and card title is 'Episodes'.
+        the episodes panel is visible and shows the completed episode by default.
         """
         Episode.objects.all().delete()
         Episode.objects.create(
@@ -1375,6 +1408,7 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'id="pending-episodes-panel"')
         self.assertContains(response, '<h3 class="card-title mb-0">Episodes</h3>')
+        self.assertContains(response, "Only Complete Ep")
 
     def test_episodes_empty_state_guidance(self):
         """
@@ -1389,8 +1423,8 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
             pub_date=timezone.now(),
             status=Episode.Status.COMPLETE,
         )
-        # 0 pending episodes, default filter is pending
-        response = self.client.get(reverse("podcast-subscribe-ui"))
+        # 0 pending episodes with pending filter active
+        response = self.client.get(reverse("podcast-subscribe-ui") + "?status=pending")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "No pending episodes match the selected filter criteria.")
         self.assertContains(
@@ -1407,11 +1441,20 @@ class PodcastSubscribeUIViewTest(PodcastTestCase):
 
     def test_episodes_canonical_querystring_in_sort_and_pagination(self):
         """
-        Verify sort and pagination URLs preserve canonical status filter (or remove it when default/empty).
+        Verify sort and pagination URLs preserve canonical status filter (or remove it when default/all).
         """
         res_empty = self.client.get(reverse("podcast-subscribe-ui") + "?status=")
         self.assertEqual(res_empty.status_code, 200)
         self.assertNotIn("status=", res_empty.context["querystring"])
+
+        res_all = self.client.get(reverse("podcast-subscribe-ui") + "?status=all")
+        self.assertEqual(res_all.status_code, 200)
+        self.assertNotIn("status=", res_all.context["querystring"])
+
+        res_pending = self.client.get(reverse("podcast-subscribe-ui") + "?status=pending")
+        self.assertEqual(res_pending.status_code, 200)
+        self.assertIn("status=pending", res_pending.context["querystring"])
+        self.assertIn("status=pending", res_pending.context["sort_urls"]["title"]["url"])
 
         res_active = self.client.get(reverse("podcast-subscribe-ui") + "?status=complete")
         self.assertEqual(res_active.status_code, 200)
