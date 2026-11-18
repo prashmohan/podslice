@@ -18,6 +18,7 @@ from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils import timezone
 from django.views import View
 from rest_framework import generics, serializers
 
@@ -30,6 +31,29 @@ from podcasts.tasks import (
     poll_feed,
     rehost_episode_audio,
 )
+
+class EpisodeProcessView(View):
+    """
+    A view to trigger background processing for a single NEW episode.
+    """
+
+    def post(self, request, episode_id):
+        """
+        Handles POST requests to immediately process a single NEW episode.
+        """
+        episode = get_object_or_404(Episode, id=episode_id)
+        updated = Episode.objects.filter(
+            id=episode.id, status=Episode.Status.NEW
+        ).update(status=Episode.Status.QUEUED, updated_at=timezone.now())
+        if updated:
+            process_thread = threading.Thread(
+                target=rehost_episode_audio, args=(episode.id,)
+            )
+            process_thread.start()
+        return redirect(
+            reverse("podcast-status-ui", kwargs={"podcast_id": episode.podcast.id})
+        )
+
 
 class EpisodeReprocessView(View):
     """

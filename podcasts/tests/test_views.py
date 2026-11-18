@@ -13,6 +13,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from podcasts.models import Episode, Podcast
+from podcasts.tasks import rehost_episode_audio
 
 
 @override_settings(REHOST_BASE_URL="http://localhost:12343")
@@ -1541,3 +1542,97 @@ class PodcastStatusUIViewTest(PodcastTestCase):
         response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "<audio controls")
+
+    def test_podcast_status_ui_renders_process_button_only_for_new_episodes(self):
+        """
+        Verify the 'Process' button is rendered next to Reprocess/Toggle AI only when
+        an episode is in the NEW state.
+        """
+        process_url = reverse("episode-process", kwargs={"episode_id": self.episode.id})
+
+        self.episode.status = Episode.Status.NEW
+        self.episode.save()
+        response_new = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+        self.assertEqual(response_new.status_code, 200)
+        self.assertContains(response_new, f'action="{process_url}"')
+        self.assertContains(response_new, '<button type="submit" class="btn btn-sm btn-primary">Process</button>')
+
+        for non_new_status in (
+            Episode.Status.QUEUED,
+            Episode.Status.DOWNLOADING,
+            Episode.Status.ANALYZING,
+            Episode.Status.PROCESSING,
+            Episode.Status.COMPLETE,
+            Episode.Status.FAILED,
+        ):
+            self.episode.status = non_new_status
+            self.episode.save()
+            response = self.client.get(reverse("podcast-status-ui", args=[self.podcast.id]))
+            self.assertEqual(response.status_code, 200)
+            self.assertNotContains(response, f'action="{process_url}"')
+
+
+class EpisodeProcessViewTest(PodcastTestCase):
+    """
+    Tests for EpisodeProcessView triggering background processing of NEW episodes.
+    """
+
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_episode_process_view_triggers_processing_for_new_episode(self, mock_thread_class):
+        """
+        POSTing to episode-process for a NEW episode transitions it to QUEUED,
+        launches rehost_episode_audio in a background thread, and redirects to status UI.
+        """
+        mock_thread_instance = mock.Mock()
+        mock_thread_class.return_value = mock_thread_instance
+
+        self.episode.status = Episode.Status.NEW
+        self.episode.save()
+
+        url = reverse("episode-process", kwargs={"episode_id": self.episode.id})
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,
+            reverse("podcast-status-ui", kwargs={"podcast_id": self.podcast.id}),
+        )
+        self.episode.refresh_from_db()
+        self.assertEqual(self.episode.status, Episode.Status.QUEUED)
+        mock_thread_class.assert_called_once_with(
+            target=rehost_episode_audio,
+            args=(self.episode.id,),
+        )
+        mock_thread_instance.start.assert_called_once()
+
+    @mock.patch("podcasts.views.threading.Thread")
+    def test_episode_process_view_ignores_non_new_episodes(self, mock_thread_class):
+        """
+        POSTing to episode-process for an episode not in NEW state redirects without
+        changing status or starting a background thread.
+        """
+        for status_val in (
+            Episode.Status.QUEUED,
+            Episode.Status.DOWNLOADING,
+            Episode.Status.COMPLETE,
+            Episode.Status.FAILED,
+        ):
+            mock_thread_class.reset_mock()
+            self.episode.status = status_val
+            self.episode.save()
+
+            url = reverse("episode-process", kwargs={"episode_id": self.episode.id})
+            response = self.client.post(url)
+
+            self.assertEqual(response.status_code, 302)
+            self.episode.refresh_from_db()
+            self.assertEqual(self.episode.status, status_val)
+            mock_thread_class.assert_not_called()
+
+    def test_episode_process_view_not_found_returns_404(self):
+        """
+        POSTing to episode-process for a non-existent episode ID returns 404.
+        """
+        url = reverse("episode-process", kwargs={"episode_id": 999999})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)

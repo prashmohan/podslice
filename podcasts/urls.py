@@ -17,6 +17,7 @@ from podcasts.views import (
     OPMLImportView,
     EpisodeStatusAPIView,
     OPMLBackupView,
+    EpisodeProcessView,
     EpisodeReprocessView,
     EpisodeToggleAIView,
 )
@@ -52,6 +53,9 @@ urlpatterns = [
     path('status/<uuid:podcast_id>/settings/',
          PodcastUpdateSettingsView.as_view(),
          name='podcast-update-settings'),
+    path('episodes/<int:episode_id>/process/',
+            EpisodeProcessView.as_view(),
+            name='episode-process'),
     path('episodes/<int:episode_id>/reprocess/',
             EpisodeReprocessView.as_view(),
             name='episode-reprocess'),
